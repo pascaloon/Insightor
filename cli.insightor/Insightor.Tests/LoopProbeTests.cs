@@ -8,55 +8,34 @@ using Xunit;
 
 namespace Insightor.Tests;
 
-public class BranchProbeTests
+public class LoopProbeTests
 {
     [Fact]
-    public void Captures_If_Condition_And_Branch_Variables()
+    public void Captures_For_Loop_Iterator()
     {
         var tempDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "insightor_tests_" + Guid.NewGuid().ToString("N"))).FullName;
         var srcPath = Path.Combine(tempDir, "Program.cs");
         var outPath = Path.Combine(tempDir, "out.jsonl");
         File.WriteAllText(srcPath, """
-int x = 1;
-
-if (x > 0)
+int x = 0;
+for (int i = 0; i < 3; i++)
 {
     x += 1;
 }
-
-int y = x + 2;
-
-Console.WriteLine($"x = {x}, y = {y}");
+Console.WriteLine(x);
 """);
 
         var root = GetRepoRoot();
         var cliProj = Path.Combine(root, "cli.insightor", "Insightor", "Insightor.csproj");
         RunCli(cliProj, srcPath, outPath);
 
-        Assert.True(File.Exists(outPath), "Output file not created.");
-        var lines = File.ReadAllLines(outPath);
-        Assert.True(lines.Length >= 4, "Expected at least four probe lines.");
+        Assert.True(File.Exists(outPath));
+        var entries = File.ReadAllLines(outPath).Select(l => JsonSerializer.Deserialize<ProbeEntry>(l)!).ToList();
 
-        var entries = lines.Select(l => JsonSerializer.Deserialize<ProbeEntry>(l)!).ToList();
-
-        // find condition line (line 3 in the snippet)
-        var cond = entries.FirstOrDefault(e => e.line == 3);
-        Assert.NotNull(cond);
-        Assert.True(cond!.variables.ContainsKey("x"));
-
-        // On line with declaration of y, both x and y should be present
-        var yDecl = entries.FirstOrDefault(e => e.line == 9) ?? entries.FirstOrDefault(e => e.variables.ContainsKey("y"));
-        Assert.NotNull(yDecl);
-        Assert.True(yDecl!.variables.ContainsKey("x"));
-        Assert.True(yDecl!.variables.ContainsKey("y"));
-
-        // After branch, x should be 2
-        var xEntry = entries.Last(e => e.variables.ContainsKey("x"));
-        Assert.Equal(2, xEntry.variables["x"].GetInt32());
-
-        // y should be 4
-        var yEntry = entries.Last(e => e.variables.ContainsKey("y"));
-        Assert.Equal(4, yEntry.variables["y"].GetInt32());
+        // Find the loop header line
+        var loopLine = entries.First(e => e.variables.ContainsKey("i")).line;
+        var iSnapshots = entries.Where(e => e.line == loopLine && e.variables.ContainsKey("i")).Select(e => e.variables["i"].GetInt32()).ToList();
+        Assert.Equal(new[] { 0, 1, 2 }, iSnapshots);
     }
 
     private static string GetRepoRoot()
@@ -75,7 +54,6 @@ Console.WriteLine($"x = {x}, y = {y}");
 
     private static void RunCli(string cliProj, string srcPath, string outPath)
     {
-        // Build into unique temp output directory to avoid locks
         var buildOut = Path.Combine(Path.GetTempPath(), "insightor_cli_build_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(buildOut);
         var objOut = (Path.Combine(buildOut, "obj").Replace('\\','/') + "/");

@@ -63,12 +63,10 @@ System.Console.WriteLine(y);
     private static void RunCli(string cliProj, string srcPath, string outPath)
     {
         // Build into unique temp output directory to avoid locks
-        var buildOut = Path.Combine(Path.GetTempPath(), "insightor_cli_build_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(buildOut);
         var build = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"build \"{cliProj}\" -c Debug -o \"{buildOut}\" /p:UseSharedCompilation=false /nr:false",
+            Arguments = $"build \"{cliProj}\" -c Debug /p:UseSharedCompilation=false /nr:false",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -82,20 +80,19 @@ System.Console.WriteLine(y);
             Assert.True(bp.ExitCode == 0, "Build failed.\n" + bo + "\n" + be);
         }
 
-        var exePath = Path.Combine(buildOut, "Insightor.dll");
         // Run with minimal retry for potential file locks
         for (int attempt = 0; attempt < 3; attempt++)
         {
             var run = new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"\"{exePath}\" \"{srcPath}\" \"{outPath}\"",
+                Arguments = $"run --no-build --project \"{cliProj}\" -- \"{srcPath}\" \"{outPath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            Console.WriteLine("Running CLI: dotnet " + run.Arguments);
+            Console.WriteLine("Running CLI: " + run.Arguments);
             using var rp = Process.Start(run)!;
             var ro = rp.StandardOutput.ReadToEnd();
             var re = rp.StandardError.ReadToEnd();

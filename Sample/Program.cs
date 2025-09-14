@@ -1,17 +1,20 @@
-﻿int x = 1;
+﻿using System;
 
-if (x > 0)
+
+Console.WriteLine(IsPalindrome("racecar"));
+Console.WriteLine(IsPalindrome("hello"));
+
+
+static bool IsPalindrome(string s)
 {
-    x += 1;
-}
-
-int y = x + 2;
-int z = add(x, y);
-
-Console.WriteLine($"x = {x}, y = {y}, z = {z}");
-
-
-int add(int a, int b)
-{
-    return a + b;
+    if (s == null) return false;
+    int left = 0, right = s.Length - 1;
+    while (left < right)
+    {
+        if (s[left] != s[right])
+            return false;
+        left++;
+        right--;
+    }
+    return true;
 }

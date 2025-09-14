@@ -226,6 +226,55 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         return node.WithStatements(SyntaxFactory.List(newStatements));
     }
 
+    public override SyntaxNode? VisitForStatement(ForStatementSyntax node)
+    {
+        // Collect variables to display per-iteration (header line attribution)
+        var vars = new List<(string name, ExpressionSyntax expr)>();
+        if (node.Declaration is VariableDeclarationSyntax decl)
+        {
+            foreach (var v in decl.Variables)
+            {
+                var name = v.Identifier.Text;
+                vars.Add((name, SyntaxFactory.IdentifierName(name)));
+            }
+            vars.AddRange(CollectReferencedIdentifiers(decl));
+        }
+        foreach (var init in node.Initializers)
+        {
+            vars.AddRange(CollectReferencedIdentifiers(init));
+        }
+        if (node.Condition is ExpressionSyntax cond)
+        {
+            vars.AddRange(CollectReferencedIdentifiers(cond));
+        }
+        foreach (var inc in node.Incrementors)
+        {
+            vars.AddRange(CollectReferencedIdentifiers(inc));
+        }
+        vars = vars.GroupBy(v => v.name).Select(g => g.First()).ToList();
+
+        var visitedBody = (StatementSyntax)base.Visit(node.Statement)!;
+        if (vars.Count > 0)
+        {
+            int line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+            var probe = CreateProbeInvocation(line, vars);
+            var probeStmt = SyntaxFactory.ExpressionStatement(probe);
+            if (visitedBody is BlockSyntax vb)
+            {
+                var newStmts = new List<StatementSyntax>();
+                newStmts.Add(probeStmt);
+                newStmts.AddRange(vb.Statements);
+                visitedBody = vb.WithStatements(SyntaxFactory.List(newStmts));
+            }
+            else
+            {
+                visitedBody = SyntaxFactory.Block(probeStmt, visitedBody);
+            }
+        }
+
+        return node.WithStatement(visitedBody);
+    }
+
     private ExpressionStatementSyntax? TryCreateConditionProbeStatement(IfStatementSyntax ifs)
     {
         var ids = CollectReferencedIdentifiers(ifs.Condition);
