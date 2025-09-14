@@ -63,20 +63,30 @@ System.Console.WriteLine(y);
     private static void RunCli(string cliProj, string srcPath, string outPath)
     {
         // Build into unique temp output directory to avoid locks
-        var build = new ProcessStartInfo
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            FileName = "dotnet",
-            Arguments = $"build \"{cliProj}\" -c Debug /p:UseSharedCompilation=false /nr:false",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        using (var bp = Process.Start(build)!)
-        {
+            var build = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"build \"{cliProj}\" -c Debug /p:UseSharedCompilation=false /nr:false",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var bp = Process.Start(build)!;
             var bo = bp.StandardOutput.ReadToEnd();
             var be = bp.StandardError.ReadToEnd();
             bp.WaitForExit(60000);
+            if (bp.ExitCode == 0)
+            {
+                break;
+            }
+            if (be.Contains("CS2012") || be.Contains("used by another process"))
+            {
+                System.Threading.Thread.Sleep(500);
+                continue;
+            }
             Assert.True(bp.ExitCode == 0, "Build failed.\n" + bo + "\n" + be);
         }
 

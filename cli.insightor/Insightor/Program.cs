@@ -216,11 +216,23 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
                 }
             }
             var visited = (StatementSyntax)base.Visit(stmt)!;
-            newStatements.Add(visited);
-            var probeStmt = TryCreateProbeStatement(stmt);
-            if (probeStmt is not null)
+            if (stmt is ReturnStatementSyntax)
             {
-                newStatements.Add(probeStmt);
+                var probeBefore = TryCreateProbeStatement(stmt);
+                if (probeBefore is not null)
+                {
+                    newStatements.Add(probeBefore);
+                }
+                newStatements.Add(visited);
+            }
+            else
+            {
+                newStatements.Add(visited);
+                var probeAfter = TryCreateProbeStatement(stmt);
+                if (probeAfter is not null)
+                {
+                    newStatements.Add(probeAfter);
+                }
             }
         }
         return node.WithStatements(SyntaxFactory.List(newStatements));
