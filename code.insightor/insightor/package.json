@@ -10,14 +10,24 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:insightor.runProbes"
+    "onCommand:insightor.startSession",
+    "onCommand:insightor.restartSession",
+    "onCommand:insightor.stopSession"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "insightor.runProbes",
-        "title": "Insightor: Run Probes on Current C# File"
+        "command": "insightor.startSession",
+        "title": "Insightor: Start Session"
+      },
+      {
+        "command": "insightor.restartSession",
+        "title": "Insightor: Restart Session"
+      },
+      {
+        "command": "insightor.stopSession",
+        "title": "Insightor: Stop Session"
       }
     ]
   },

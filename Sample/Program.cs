@@ -14,14 +14,19 @@
 //     Console.WriteLine(Sum(a, i));
 // }
 
-
-
 // Example usage:
-Console.WriteLine(BinarySearch(new int[] { 1, 3, 5}, 111));
+int result = BinarySearch(new int[] { 1, 3, 5, 7, 9 }, 7);
+Console.WriteLine(result);
+
+
+int aa =4;
+int bb = 5;
+
 
 static int BinarySearch(int[] arr, int target)
 {
     int left = 0, right = arr.Length - 1;
+    
     while (left <= right)
     {
         int mid = left + (right - left) / 2;
