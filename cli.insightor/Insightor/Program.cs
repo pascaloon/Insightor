@@ -164,6 +164,7 @@ static IEnumerable<MetadataReference> GetTrustedPlatformReferences()
 sealed class ProbeRewriter : CSharpSyntaxRewriter
 {
     private readonly SemanticModel _semanticModel;
+    private int _returnCounter = 0;
     public ProbeRewriter(SemanticModel semanticModel)
     {
         _semanticModel = semanticModel;
@@ -200,24 +201,23 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         foreach (var stmt in node.Statements)
         {
             var visited = (StatementSyntax)base.Visit(stmt)!;
-            if (stmt is ReturnStatementSyntax)
+            if (stmt is ReturnStatementSyntax ret)
             {
+                var transformed = TransformReturnStatement(ret);
+                if (transformed is not null)
+                {
+                    newStatements.Add(transformed);
+                    continue;
+                }
+                // fallback (no expression)
                 var probeBefore = TryCreateProbeStatement(stmt);
-                if (probeBefore is not null)
-                {
-                    newStatements.Add(probeBefore);
-                }
+                if (probeBefore is not null) newStatements.Add(probeBefore);
                 newStatements.Add(visited);
+                continue;
             }
-            else
-            {
-                newStatements.Add(visited);
-                var probeAfter = TryCreateProbeStatement(stmt);
-                if (probeAfter is not null)
-                {
-                    newStatements.Add(probeAfter);
-                }
-            }
+            newStatements.Add(visited);
+            var probeAfter = TryCreateProbeStatement(stmt);
+            if (probeAfter is not null) newStatements.Add(probeAfter);
         }
         return node.WithStatements(SyntaxFactory.List(newStatements));
     }
@@ -254,6 +254,11 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
 
     private StatementSyntax InstrumentChildWithProbe(StatementSyntax original, StatementSyntax visited)
     {
+        if (original is ReturnStatementSyntax ret)
+        {
+            var transformed = TransformReturnStatement(ret);
+            if (transformed is not null) return transformed;
+        }
         var probe = TryCreateProbeStatement(original);
         if (probe is null)
         {
@@ -355,6 +360,40 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         int line = ifs.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
         var probe = CreateProbeInvocation(line, ids);
         return SyntaxFactory.ExpressionStatement(probe);
+    }
+
+    private StatementSyntax? TransformReturnStatement(ReturnStatementSyntax ret)
+    {
+        if (ret.Expression is null) return null;
+        int line = ret.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+        string tempName = "__insightor_ret" + (++_returnCounter).ToString();
+        var tempId = SyntaxFactory.IdentifierName(tempName);
+
+        // var __insightor_retN = <expr>;
+        var decl = SyntaxFactory.LocalDeclarationStatement(
+            SyntaxFactory.VariableDeclaration(
+                SyntaxFactory.IdentifierName("var"),
+                SyntaxFactory.SeparatedList(new[] {
+                    SyntaxFactory.VariableDeclarator(
+                        SyntaxFactory.Identifier(tempName))
+                    .WithInitializer(
+                        SyntaxFactory.EqualsValueClause(ret.Expression!))
+                })
+            )
+        );
+
+        // Build variables list: return value first, then referenced identifiers
+        var vars = new List<(string name, ExpressionSyntax expr)>
+        {
+            ("return", tempId)
+        };
+        vars.AddRange(CollectReferencedIdentifiers(ret.Expression!));
+        vars = vars.GroupBy(v => v.name).Select(g => g.First()).ToList();
+        var probe = CreateProbeInvocation(line, vars);
+
+        var probeStmt = SyntaxFactory.ExpressionStatement(probe);
+        var returnStmt = SyntaxFactory.ReturnStatement(tempId);
+        return SyntaxFactory.Block(decl, probeStmt, returnStmt);
     }
 
     private ExpressionStatementSyntax? TryCreateProbeStatement(StatementSyntax stmt)

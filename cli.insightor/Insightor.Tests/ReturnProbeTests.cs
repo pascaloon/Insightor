@@ -34,9 +34,10 @@ Console.WriteLine(Sum(a, b));
         RunCli(cliProj, srcPath, outPath);
 
         var entries = File.ReadAllLines(outPath).Select(l => JsonSerializer.Deserialize<ProbeEntry>(l)!).ToList();
-        // Find a return line snapshot containing z
-        var ret = entries.FirstOrDefault(e => e.variables.ContainsKey("z"));
+        // Find a return line snapshot containing special 'return'
+        var ret = entries.FirstOrDefault(e => e.variables.ContainsKey("return"));
         Assert.NotNull(ret);
+        Assert.Equal(5, ret!.variables["return"].GetInt32());
     }
 
     private static string GetRepoRoot()
