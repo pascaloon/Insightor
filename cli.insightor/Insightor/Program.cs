@@ -252,6 +252,76 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         return SyntaxFactory.Block(condProbe, updated);
     }
 
+    public override SyntaxNode? VisitSimpleLambdaExpression(SimpleLambdaExpressionSyntax node)
+    {
+        // Transform expression-bodied lambda to emit return probe
+        if (node.Body is ExpressionSyntax expr)
+        {
+            var type = _semanticModel.GetTypeInfo(expr).ConvertedType;
+            if (type is not null && type.SpecialType != SpecialType.System_Void)
+            {
+                int line = expr.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                string tempName = "__insightor_ret" + (++_returnCounter).ToString();
+                var tempId = SyntaxFactory.IdentifierName(tempName);
+                var decl = SyntaxFactory.LocalDeclarationStatement(
+                    SyntaxFactory.VariableDeclaration(
+                        SyntaxFactory.IdentifierName("var"),
+                        SyntaxFactory.SeparatedList(new[] {
+                            SyntaxFactory.VariableDeclarator(SyntaxFactory.Identifier(tempName))
+                                .WithInitializer(SyntaxFactory.EqualsValueClause(expr))
+                        })
+                    )
+                );
+                var vars = new List<(string name, ExpressionSyntax expr)> { ("return", tempId) };
+                vars.AddRange(CollectReferencedIdentifiers(expr));
+                vars = vars.GroupBy(v => v.name).Select(g => g.First()).ToList();
+                var probe = CreateProbeInvocation(line, vars);
+                var body = SyntaxFactory.Block(
+                    decl,
+                    SyntaxFactory.ExpressionStatement(probe),
+                    SyntaxFactory.ReturnStatement(tempId)
+                );
+                // Do not visit expr twice; replace body directly
+                return node.WithBody(body);
+            }
+        }
+        return base.VisitSimpleLambdaExpression(node);
+    }
+
+    public override SyntaxNode? VisitParenthesizedLambdaExpression(ParenthesizedLambdaExpressionSyntax node)
+    {
+        if (node.Body is ExpressionSyntax expr)
+        {
+            var type = _semanticModel.GetTypeInfo(expr).ConvertedType;
+            if (type is not null && type.SpecialType != SpecialType.System_Void)
+            {
+                int line = expr.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                string tempName = "__insightor_ret" + (++_returnCounter).ToString();
+                var tempId = SyntaxFactory.IdentifierName(tempName);
+                var decl = SyntaxFactory.LocalDeclarationStatement(
+                    SyntaxFactory.VariableDeclaration(
+                        SyntaxFactory.IdentifierName("var"),
+                        SyntaxFactory.SeparatedList(new[] {
+                            SyntaxFactory.VariableDeclarator(SyntaxFactory.Identifier(tempName))
+                                .WithInitializer(SyntaxFactory.EqualsValueClause(expr))
+                        })
+                    )
+                );
+                var vars = new List<(string name, ExpressionSyntax expr)> { ("return", tempId) };
+                vars.AddRange(CollectReferencedIdentifiers(expr));
+                vars = vars.GroupBy(v => v.name).Select(g => g.First()).ToList();
+                var probe = CreateProbeInvocation(line, vars);
+                var body = SyntaxFactory.Block(
+                    decl,
+                    SyntaxFactory.ExpressionStatement(probe),
+                    SyntaxFactory.ReturnStatement(tempId)
+                );
+                return node.WithBody(body);
+            }
+        }
+        return base.VisitParenthesizedLambdaExpression(node);
+    }
+
     private StatementSyntax InstrumentChildWithProbe(StatementSyntax original, StatementSyntax visited)
     {
         if (original is ReturnStatementSyntax ret)

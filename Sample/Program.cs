@@ -36,7 +36,9 @@
 var arr = new int[] { 1, 3, 5, 7, 9 };
 var arr2 = arr
     .Where(x => {return x > 5;})
+    .Select(x => x *2)
     .ToList();
+
 
 
 
