@@ -1,0 +1,59 @@
+# .NET / Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+[Bb]uild/
+[Rr]elease/
+[Dd]ebug/
+[Ll]og/
+[Ll]ogs/
+TestResults/
+[Tt]est[Rr]esult*/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Coverage / profiling
+*.coverage
+*.coveragexml
+*.codecoverage
+*.psess
+*.vsp
+*.vspx
+coverage/
+
+# ReSharper / Rider / NCrunch
+_ReSharper*/
+[Rr]e[Ss]harper*/
+*.ncrunch*
+_NCrunch_*
+
+# Cache / logs / misc
+*.pdb
+*.mdb
+*.opendb
+*.cache
+*.log
+*.svclog
+*.pidb
+StyleCop.Cache
+
+# IDEs
+.idea/
+.history/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
