@@ -243,11 +243,20 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         {
             case LocalDeclarationStatementSyntax localDecl:
                 vars = new List<(string, ExpressionSyntax)>();
+                // Declared variable identifiers (e.g., y)
                 foreach (var v in localDecl.Declaration.Variables)
                 {
                     var name = v.Identifier.Text;
                     vars.Add((name, SyntaxFactory.IdentifierName(name)));
                 }
+                // Plus any referenced identifiers in initializers (e.g., x in int y = x + 2;)
+                var initRefs = CollectReferencedIdentifiers(localDecl.Declaration);
+                vars.AddRange(initRefs);
+                // Distinct by name
+                vars = vars
+                    .GroupBy(p => p.name)
+                    .Select(g => g.First())
+                    .ToList();
                 if (vars.Count == 0) return null;
                 break;
             case ExpressionStatementSyntax exprStmt:

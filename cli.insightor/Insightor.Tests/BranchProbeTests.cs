@@ -44,6 +44,12 @@ Console.WriteLine($"x = {x}, y = {y}");
         Assert.NotNull(cond);
         Assert.True(cond!.variables.ContainsKey("x"));
 
+        // On line with declaration of y, both x and y should be present
+        var yDecl = entries.FirstOrDefault(e => e.line == 9) ?? entries.FirstOrDefault(e => e.variables.ContainsKey("y"));
+        Assert.NotNull(yDecl);
+        Assert.True(yDecl!.variables.ContainsKey("x"));
+        Assert.True(yDecl!.variables.ContainsKey("y"));
+
         // After branch, x should be 2
         var xEntry = entries.Last(e => e.variables.ContainsKey("x"));
         Assert.Equal(2, xEntry.variables["x"].GetInt32());
@@ -69,11 +75,13 @@ Console.WriteLine($"x = {x}, y = {y}");
 
     private static void RunCli(string cliProj, string srcPath, string outPath)
     {
-        // Build
+        // Build into unique temp output directory to avoid locks
+        var buildOut = Path.Combine(Path.GetTempPath(), "insightor_cli_build_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(buildOut);
         var build = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"build \"{cliProj}\" -c Debug",
+            Arguments = $"build \"{cliProj}\" -c Debug -o \"{buildOut}\" /p:UseSharedCompilation=false /nr:false",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -87,13 +95,14 @@ Console.WriteLine($"x = {x}, y = {y}");
             Assert.True(bp.ExitCode == 0, "Build failed.\n" + bo + "\n" + be);
         }
 
+        var exePath = Path.Combine(buildOut, "Insightor.dll");
         // Run with minimal retry for potential file locks
         for (int attempt = 0; attempt < 3; attempt++)
         {
             var run = new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"run --no-build --project \"{cliProj}\" -- \"{srcPath}\" \"{outPath}\"",
+                Arguments = $"\"{exePath}\" \"{srcPath}\" \"{outPath}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
