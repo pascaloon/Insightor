@@ -171,39 +171,68 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode? VisitCompilationUnit(CompilationUnitSyntax node)
     {
-        // Process global statements without introducing new scopes
-        var rewritten = (CompilationUnitSyntax)base.VisitCompilationUnit(node)!;
+        // Build from original members so semantic model nodes match
         var newMembers = new List<MemberDeclarationSyntax>();
-        foreach (var member in rewritten.Members)
+        foreach (var member in node.Members)
         {
-            newMembers.Add(member);
             if (member is GlobalStatementSyntax gs)
             {
+                if (gs.Statement is IfStatementSyntax ifs)
+                {
+                    var condProbe = TryCreateConditionProbeStatement(ifs);
+                    if (condProbe is not null)
+                    {
+                        newMembers.Add(SyntaxFactory.GlobalStatement(condProbe));
+                    }
+                }
+                var visitedStmt = (StatementSyntax)base.Visit(gs.Statement)!;
+                newMembers.Add(SyntaxFactory.GlobalStatement(visitedStmt));
                 var probeStmt = TryCreateProbeStatement(gs.Statement);
                 if (probeStmt is not null)
                 {
                     newMembers.Add(SyntaxFactory.GlobalStatement(probeStmt));
                 }
             }
+            else
+            {
+                newMembers.Add((MemberDeclarationSyntax)base.Visit(member)!);
+            }
         }
-        return rewritten.WithMembers(SyntaxFactory.List(newMembers));
+        return node.WithMembers(SyntaxFactory.List(newMembers));
     }
 
     public override SyntaxNode? VisitBlock(BlockSyntax node)
     {
-        // Interleave probe statements after each statement in block
-        var rewritten = (BlockSyntax)base.VisitBlock(node)!;
+        // Interleave using original statements for semantic model correctness
         var newStatements = new List<StatementSyntax>();
-        foreach (var stmt in rewritten.Statements)
+        foreach (var stmt in node.Statements)
         {
-            newStatements.Add(stmt);
+            if (stmt is IfStatementSyntax ifs)
+            {
+                var condProbe = TryCreateConditionProbeStatement(ifs);
+                if (condProbe is not null)
+                {
+                    newStatements.Add(condProbe);
+                }
+            }
+            var visited = (StatementSyntax)base.Visit(stmt)!;
+            newStatements.Add(visited);
             var probeStmt = TryCreateProbeStatement(stmt);
             if (probeStmt is not null)
             {
                 newStatements.Add(probeStmt);
             }
         }
-        return rewritten.WithStatements(SyntaxFactory.List(newStatements));
+        return node.WithStatements(SyntaxFactory.List(newStatements));
+    }
+
+    private ExpressionStatementSyntax? TryCreateConditionProbeStatement(IfStatementSyntax ifs)
+    {
+        var ids = CollectReferencedIdentifiers(ifs.Condition);
+        if (ids.Count == 0) return null;
+        int line = ifs.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+        var probe = CreateProbeInvocation(line, ids);
+        return SyntaxFactory.ExpressionStatement(probe);
     }
 
     private ExpressionStatementSyntax? TryCreateProbeStatement(StatementSyntax stmt)
@@ -345,3 +374,4 @@ namespace __Insightor
 }
 """;
 }
+

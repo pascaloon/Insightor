@@ -8,46 +8,53 @@ using Xunit;
 
 namespace Insightor.Tests;
 
-public class SimpleProbeTests
+public class BranchProbeTests
 {
     [Fact]
-    public void Captures_Local_Variables()
+    public void Captures_If_Condition_And_Branch_Variables()
     {
-        // Arrange: create temp source file
         var tempDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "insightor_tests_" + Guid.NewGuid().ToString("N"))).FullName;
         var srcPath = Path.Combine(tempDir, "Program.cs");
         var outPath = Path.Combine(tempDir, "out.jsonl");
         File.WriteAllText(srcPath, """
 int x = 1;
+
+if (x > 0)
+{
+    x += 1;
+}
+
 int y = x + 2;
-System.Console.WriteLine(y);
+
+Console.WriteLine($"x = {x}, y = {y}");
 """);
 
-        // Act: build once, then run with --no-build to avoid file lock issues
         var root = GetRepoRoot();
         var cliProj = Path.Combine(root, "cli.insightor", "Insightor", "Insightor.csproj");
         RunCli(cliProj, srcPath, outPath);
 
-        // Assert: output exists and contains expected variables
         Assert.True(File.Exists(outPath), "Output file not created.");
         var lines = File.ReadAllLines(outPath);
-        Assert.True(lines.Length >= 2, "Expected at least two probe lines.");
+        Assert.True(lines.Length >= 4, "Expected at least four probe lines.");
 
         var entries = lines.Select(l => JsonSerializer.Deserialize<ProbeEntry>(l)!).ToList();
-        // Find line with y
-        var yEntry = entries.FirstOrDefault(e => e.variables.ContainsKey("y"));
-        Assert.NotNull(yEntry);
-        Assert.Equal(3, yEntry!.variables["y"].GetInt32());
 
-        // x should be 1
-        var xEntry = entries.FirstOrDefault(e => e.variables.ContainsKey("x"));
-        Assert.NotNull(xEntry);
-        Assert.Equal(1, xEntry!.variables["x"].GetInt32());
+        // find condition line (line 3 in the snippet)
+        var cond = entries.FirstOrDefault(e => e.line == 3);
+        Assert.NotNull(cond);
+        Assert.True(cond!.variables.ContainsKey("x"));
+
+        // After branch, x should be 2
+        var xEntry = entries.Last(e => e.variables.ContainsKey("x"));
+        Assert.Equal(2, xEntry.variables["x"].GetInt32());
+
+        // y should be 4
+        var yEntry = entries.Last(e => e.variables.ContainsKey("y"));
+        Assert.Equal(4, yEntry.variables["y"].GetInt32());
     }
 
     private static string GetRepoRoot()
     {
-        // Traverse up from current directory to find the repo root containing cli.insightor
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (dir is not null)
         {
@@ -92,7 +99,6 @@ System.Console.WriteLine(y);
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            Console.WriteLine("Running CLI: " + run.Arguments);
             using var rp = Process.Start(run)!;
             var ro = rp.StandardOutput.ReadToEnd();
             var re = rp.StandardError.ReadToEnd();
