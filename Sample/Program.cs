@@ -33,6 +33,9 @@
 //     return -1;
 // }
 
+int x = 5;
+int y = x + 4;
+
 var arr = new int[] { 1, 3, 5, 7, 9 };
 var arr2 = arr
     .Where(x => {return x > 5;})

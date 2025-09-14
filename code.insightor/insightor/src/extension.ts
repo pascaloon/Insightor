@@ -104,14 +104,30 @@ class InsightorInlayProvider implements vscode.InlayHintsProvider {
     const key = document.uri.toString();
     const entries = state.lastResults.get(key) ?? [];
     const hints: vscode.InlayHint[] = [];
-    for (const entry of entries) {
-      const lineIdx = entry.line - 1;
+    const byLine = new Map<number, ProbeEntry[]>();
+    for (const e of entries) {
+      const idx = e.line - 1;
+      if (!byLine.has(idx)) byLine.set(idx, []);
+      byLine.get(idx)!.push(e);
+    }
+    for (const [lineIdx, group] of byLine.entries()) {
       if (lineIdx < 0 || lineIdx >= document.lineCount) continue;
       const line = document.lineAt(lineIdx);
       if (!range.contains(line.range)) continue;
-      const text = Object.entries(entry.variables).map(([k, v]) => `${k}: ${formatValue(v)}`).join(', ');
+      const perProbeTexts = group.map(entry => {
+        const varsEntries = Object.entries(entry.variables);
+        const retEntry = varsEntries.find(([k]) => k === 'return');
+        const nonReturn = varsEntries.filter(([k]) => k !== 'return');
+        const parts: string[] = [];
+        parts.push(...nonReturn.map(([k, v]) => `${k}: ${formatValue(v)}`));
+        if (retEntry) parts.push(`return: ${formatValue(retEntry[1])}`);
+        return parts.join(', ');
+      }).filter(t => t.length > 0);
+      if (perProbeTexts.length === 0) continue;
+      const text = perProbeTexts.join(' | ');
       const position = new vscode.Position(lineIdx, line.range.end.character);
-      const hint = new vscode.InlayHint(position, ` // ${text}`, vscode.InlayHintKind.Type);
+      const hint = new vscode.InlayHint(position, text, vscode.InlayHintKind.Type);
+      hint.paddingLeft = true;
       hints.push(hint);
     }
     return hints;
