@@ -438,15 +438,34 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
     private List<(string name, ExpressionSyntax expr)> CollectReferencedIdentifiers(SyntaxNode node)
     {
         var results = new List<(string name, ExpressionSyntax expr)>();
-        foreach (var id in node.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+
+        bool IsLambdaBoundary(SyntaxNode n) =>
+            n is SimpleLambdaExpressionSyntax
+            || n is ParenthesizedLambdaExpressionSyntax
+            || n is AnonymousMethodExpressionSyntax
+            || n is LocalFunctionStatementSyntax;
+
+        void Traverse(SyntaxNode n)
         {
-            var symbol = _semanticModel.GetSymbolInfo(id).Symbol;
-            if (symbol is ILocalSymbol or IParameterSymbol or IFieldSymbol)
+            if (IsLambdaBoundary(n))
             {
-                var name = id.Identifier.Text;
-                results.Add((name, SyntaxFactory.IdentifierName(name)));
+                // Do not traverse into new parameter scope; outer probe cannot reference those names
+                return;
             }
+            if (n is IdentifierNameSyntax id)
+            {
+                var symbol = _semanticModel.GetSymbolInfo(id).Symbol;
+                if (symbol is ILocalSymbol or IParameterSymbol or IFieldSymbol)
+                {
+                    var name = id.Identifier.Text;
+                    results.Add((name, SyntaxFactory.IdentifierName(name)));
+                }
+            }
+            foreach (var child in n.ChildNodes()) Traverse(child);
         }
+
+        Traverse(node);
+
         return results
             .GroupBy(x => x.name)
             .Select(g => g.First())
