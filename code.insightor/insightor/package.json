@@ -28,6 +28,10 @@
       {
         "command": "insightor.stopSession",
         "title": "Insightor: Stop Session"
+      },
+      {
+        "command": "insightor.showTimeline",
+        "title": "Insightor: Show Timeline"
       }
     ]
   },
