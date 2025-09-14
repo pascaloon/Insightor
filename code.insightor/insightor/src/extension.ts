@@ -44,10 +44,11 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage('Open a workspace to run Insightor.');
 			return;
 		}
-		const cliProj = path.join(workspaceFolder.uri.fsPath, 'cli.insightor', 'Insightor', 'Insightor.csproj');
+		const extDir = context.extensionUri.fsPath;
+		const cliProj = path.resolve(extDir, '..', '..', 'cli.insightor', 'Insightor', 'Insightor.csproj');
 		const status = vscode.window.setStatusBarMessage('$(play) Insightor: running...');
 		try {
-			const proc = spawn('dotnet', ['run', '--project', cliProj, '--', doc.fileName, outPath], { cwd: workspaceFolder.uri.fsPath });
+			const proc = spawn('dotnet', ['run', '--project', cliProj, '--', doc.fileName, outPath], { cwd: path.dirname(cliProj) });
 			let stderr = '';
 			proc.stderr.on('data', d => { stderr += d.toString(); });
 			await new Promise<void>((resolve, reject) => {
@@ -77,11 +78,11 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 class InsightorInlayProvider implements vscode.InlayHintsProvider {
-  private _onDidChangeInlayHints = new vscode.EventEmitter<vscode.Uri | undefined>();
+  private _onDidChangeInlayHints = new vscode.EventEmitter<void>();
   onDidChangeInlayHints = this._onDidChangeInlayHints.event;
 
   refresh(doc?: vscode.TextDocument) {
-    this._onDidChangeInlayHints.fire(doc?.uri);
+    this._onDidChangeInlayHints.fire();
   }
 
   provideInlayHints(document: vscode.TextDocument, range: vscode.Range, token: vscode.CancellationToken): vscode.ProviderResult<vscode.InlayHint[]> {
@@ -95,7 +96,7 @@ class InsightorInlayProvider implements vscode.InlayHintsProvider {
       if (!range.contains(line.range)) continue;
       const text = Object.entries(entry.variables).map(([k, v]) => `${k}: ${formatValue(v)}`).join(', ');
       const position = new vscode.Position(lineIdx, line.range.end.character);
-      const hint = new vscode.InlayHint(` // ${text}`, position, vscode.InlayHintKind.Type);
+      const hint = new vscode.InlayHint(position, ` // ${text}`, vscode.InlayHintKind.Type);
       hints.push(hint);
     }
     return hints;

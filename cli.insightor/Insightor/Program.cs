@@ -49,7 +49,20 @@ var instrumentedTree = (CSharpSyntaxTree)syntaxTree.WithRootAndOptions(newRoot, 
 // Add __Probe helper to the compilation with identical parse options
 var probeTree = CSharpSyntaxTree.ParseText(SourceText.From(ProbeSource.GetSource(), Encoding.UTF8), parseOptions);
 
-compilation = compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(instrumentedTree, probeTree);
+// Emulate SDK implicit usings so typical code like `Console.WriteLine` compiles without explicit `using System;`
+var implicitUsings = string.Join("\n", new[]
+{
+    "global using System;",
+    "global using System.Collections.Generic;",
+    "global using System.IO;",
+    "global using System.Linq;",
+    "global using System.Net.Http;",
+    "global using System.Threading;",
+    "global using System.Threading.Tasks;"
+});
+var implicitUsingsTree = CSharpSyntaxTree.ParseText(SourceText.From(implicitUsings + "\n", Encoding.UTF8), parseOptions);
+
+compilation = compilation.RemoveAllSyntaxTrees().AddSyntaxTrees(instrumentedTree, probeTree, implicitUsingsTree);
 
 using var peStream = new MemoryStream();
 using var pdbStream = new MemoryStream();
@@ -130,6 +143,7 @@ static IEnumerable<MetadataReference> GetTrustedPlatformReferences()
         "System.Linq",
         "System.Collections",
         "System.IO",
+        "System.Net.Http",
         "System.Threading",
         "System.Threading.Tasks",
         "System.Runtime.Extensions",
@@ -260,6 +274,8 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
 static class ProbeSource
 {
     public static string GetSource() => """
+// Enable nullable context to avoid CS8632 warnings in this helper
+#nullable enable
 namespace __Insightor
 {
     using System;
