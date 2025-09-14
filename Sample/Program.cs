@@ -17,7 +17,7 @@
 
 
 // Example usage:
-Console.WriteLine(BinarySearch(new int[] { 1, 3, 5, 7, 9 }, 1));
+Console.WriteLine(BinarySearch(new int[] { 1, 3, 5}, 111));
 
 static int BinarySearch(int[] arr, int target)
 {

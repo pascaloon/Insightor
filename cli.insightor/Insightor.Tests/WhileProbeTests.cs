@@ -8,46 +8,35 @@ using Xunit;
 
 namespace Insightor.Tests;
 
-public class SimpleProbeTests
+public class WhileProbeTests
 {
     [Fact]
-    public void Captures_Local_Variables()
+    public void Captures_While_Loop_Condition_Variables()
     {
-        // Arrange: create temp source file
         var tempDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "insightor_tests_" + Guid.NewGuid().ToString("N"))).FullName;
         var srcPath = Path.Combine(tempDir, "Program.cs");
         var outPath = Path.Combine(tempDir, "out.jsonl");
         File.WriteAllText(srcPath, """
-int x = 1;
-int y = x + 2;
-System.Console.WriteLine(y);
+int x = 0;
+while (x < 3)
+{
+    x++;
+}
+Console.WriteLine(x);
 """);
 
-        // Act: build once, then run with --no-build to avoid file lock issues
         var root = GetRepoRoot();
         var cliProj = Path.Combine(root, "cli.insightor", "Insightor", "Insightor.csproj");
         RunCli(cliProj, srcPath, outPath);
 
-        // Assert: output exists and contains expected variables
-        Assert.True(File.Exists(outPath), "Output file not created.");
-        var lines = File.ReadAllLines(outPath);
-        Assert.True(lines.Length >= 2, "Expected at least two probe lines.");
-
-        var entries = lines.Select(l => JsonSerializer.Deserialize<ProbeEntry>(l)!).ToList();
-        // Find line with y
-        var yEntry = entries.FirstOrDefault(e => e.variables.ContainsKey("y"));
-        Assert.NotNull(yEntry);
-        Assert.Equal(3, yEntry!.variables["y"].GetInt32());
-
-        // x should be 1
-        var xEntry = entries.FirstOrDefault(e => e.variables.ContainsKey("x"));
-        Assert.NotNull(xEntry);
-        Assert.Equal(1, xEntry!.variables["x"].GetInt32());
+        var entries = File.ReadAllLines(outPath).Select(l => JsonSerializer.Deserialize<ProbeEntry>(l)!).ToList();
+        var loopGroup = entries.Where(e => e.variables.ContainsKey("x")).GroupBy(e => e.line).OrderByDescending(g => g.Count()).First();
+        var snapshots = loopGroup.Select(e => e.variables["x"].GetInt32()).ToList();
+        Assert.Equal(new[] { 0, 1, 2 }, snapshots);
     }
 
     private static string GetRepoRoot()
     {
-        // Traverse up from current directory to find the repo root containing cli.insightor
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
         while (dir is not null)
         {
@@ -62,10 +51,8 @@ System.Console.WriteLine(y);
 
     private static void RunCli(string cliProj, string srcPath, string outPath)
     {
-        // Build into unique temp output directory to avoid locks
         TestUtils.EnsureBuilt(cliProj);
 
-        // Run with minimal retry for potential file locks
         for (int attempt = 0; attempt < 3; attempt++)
         {
             var run = new ProcessStartInfo
@@ -77,7 +64,6 @@ System.Console.WriteLine(y);
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            Console.WriteLine("Running CLI: " + run.Arguments);
             using var rp = Process.Start(run)!;
             var ro = rp.StandardOutput.ReadToEnd();
             var re = rp.StandardError.ReadToEnd();

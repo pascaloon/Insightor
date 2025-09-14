@@ -177,14 +177,6 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         {
             if (member is GlobalStatementSyntax gs)
             {
-                if (gs.Statement is IfStatementSyntax ifs)
-                {
-                    var condProbe = TryCreateConditionProbeStatement(ifs);
-                    if (condProbe is not null)
-                    {
-                        newMembers.Add(SyntaxFactory.GlobalStatement(condProbe));
-                    }
-                }
                 var visitedStmt = (StatementSyntax)base.Visit(gs.Statement)!;
                 newMembers.Add(SyntaxFactory.GlobalStatement(visitedStmt));
                 var probeStmt = TryCreateProbeStatement(gs.Statement);
@@ -207,14 +199,6 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         var newStatements = new List<StatementSyntax>();
         foreach (var stmt in node.Statements)
         {
-            if (stmt is IfStatementSyntax ifs)
-            {
-                var condProbe = TryCreateConditionProbeStatement(ifs);
-                if (condProbe is not null)
-                {
-                    newStatements.Add(condProbe);
-                }
-            }
             var visited = (StatementSyntax)base.Visit(stmt)!;
             if (stmt is ReturnStatementSyntax)
             {
@@ -236,6 +220,55 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             }
         }
         return node.WithStatements(SyntaxFactory.List(newStatements));
+    }
+
+    public override SyntaxNode? VisitIfStatement(IfStatementSyntax node)
+    {
+        // Compute probe from ORIGINAL node to match the semantic model
+        var condProbe = TryCreateConditionProbeStatement(node);
+        // Visit children next
+        var visited = (IfStatementSyntax)base.VisitIfStatement(node)!;
+        // Ensure single-statement bodies are instrumented with post/return probes
+        var newThen = InstrumentChildWithProbe(node.Statement, visited.Statement);
+        IfStatementSyntax updated = visited.WithStatement(newThen);
+        if (visited.Else is not null && node.Else is not null)
+        {
+            // If this is an else-if, leave it to recursive VisitIfStatement
+            if (node.Else.Statement is IfStatementSyntax)
+            {
+                // keep as visited
+            }
+            else
+            {
+                var newElseStmt = InstrumentChildWithProbe(node.Else.Statement, visited.Else.Statement);
+                updated = updated.WithElse(visited.Else.WithStatement(newElseStmt));
+            }
+        }
+        if (condProbe is null)
+        {
+            return updated;
+        }
+        // Wrap with a block that emits the condition probe, then evaluates the if
+        return SyntaxFactory.Block(condProbe, updated);
+    }
+
+    private StatementSyntax InstrumentChildWithProbe(StatementSyntax original, StatementSyntax visited)
+    {
+        var probe = TryCreateProbeStatement(original);
+        if (probe is null)
+        {
+            return visited;
+        }
+        if (original is ReturnStatementSyntax)
+        {
+            // Pre-return probe
+            return SyntaxFactory.Block(probe, visited);
+        }
+        else
+        {
+            // Post-statement probe
+            return SyntaxFactory.Block(visited, probe);
+        }
     }
 
     public override SyntaxNode? VisitForStatement(ForStatementSyntax node)
@@ -263,6 +296,34 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         {
             vars.AddRange(CollectReferencedIdentifiers(inc));
         }
+        vars = vars.GroupBy(v => v.name).Select(g => g.First()).ToList();
+
+        var visitedBody = (StatementSyntax)base.Visit(node.Statement)!;
+        if (vars.Count > 0)
+        {
+            int line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+            var probe = CreateProbeInvocation(line, vars);
+            var probeStmt = SyntaxFactory.ExpressionStatement(probe);
+            if (visitedBody is BlockSyntax vb)
+            {
+                var newStmts = new List<StatementSyntax>();
+                newStmts.Add(probeStmt);
+                newStmts.AddRange(vb.Statements);
+                visitedBody = vb.WithStatements(SyntaxFactory.List(newStmts));
+            }
+            else
+            {
+                visitedBody = SyntaxFactory.Block(probeStmt, visitedBody);
+            }
+        }
+
+        return node.WithStatement(visitedBody);
+    }
+
+    public override SyntaxNode? VisitWhileStatement(WhileStatementSyntax node)
+    {
+        // Compute variables referenced in the while condition
+        var vars = node.Condition is null ? new List<(string name, ExpressionSyntax expr)>() : CollectReferencedIdentifiers(node.Condition);
         vars = vars.GroupBy(v => v.name).Select(g => g.First()).ToList();
 
         var visitedBody = (StatementSyntax)base.Visit(node.Statement)!;
