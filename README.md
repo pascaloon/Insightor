@@ -131,7 +131,7 @@ npm run compile
 
 ## Contributors (last 180 days)
 
-- passelin <pascalasselin@hotmail.com>
+- passelin
 
 ## Repository Layout
 
