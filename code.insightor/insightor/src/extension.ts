@@ -570,7 +570,7 @@ function pushCallGraphData() {
   for (const f of active) {
     const evs = events.filter(e => e.__seq >= f.start && e.__seq <= f.end);
     const startEv = evs.find(e => (e.type ?? 'line') === 'callStart' && (e.method||'') === f.method);
-    const retLineEv = evs.find(e => (e.type ?? 'line') === 'line' && e.variables && Object.prototype.hasOwnProperty.call(e.variables, 'return'));
+    const retLineEv = [...evs].reverse().find(e => (e.type ?? 'line') === 'line' && e.variables && Object.prototype.hasOwnProperty.call(e.variables, 'return'));
     annotations[f.id] = { args: (startEv?.variables as any) || {}, ret: retLineEv?.variables ? (retLineEv.variables as any)['return'] : undefined };
   }
   state.callGraphPanel.webview.postMessage({ type: 'graph', nodes: Array.from(nodes.values()), edges, annotations });

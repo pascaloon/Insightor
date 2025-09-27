@@ -33,7 +33,8 @@ int z3 = Fact(6);
 
 string Booboo(string a, int v)
 {
-    return $"{a} v";
+    int vv = Add(v, a.Length);
+    return $"{a} {vv}";
 }
 
 Booboo("ha", 3);
