@@ -1,4 +1,14 @@
 ﻿
+int Add(int x, int y)
+{
+    return x + y;
+}
+
+int a = 3;
+int b = 4;
+int z = Add(a, b);
+
+
 // int a = 2;
 // int b = 3;
 
@@ -14,33 +24,33 @@
 // }
 
 // Example usage:
-BinarySearch(new int[] { 1, 3, 5, 7, 9 }, 77);
+// BinarySearch(new int[] { 1, 3, 5, 7, 9 }, 77);
 
-static int BinarySearch(int[] arr, int target)
-{
-    int left = 0, right = arr.Length - 1;
+// static int BinarySearch(int[] arr, int target)
+// {
+//     int left = 0, right = arr.Length - 1;
     
-    while (left <= right)
-    {
-        int mid = left + (right - left) / 2;
-        if (arr[mid] == target)
-            return mid;
-        else if (arr[mid] < target)
-            left = mid + 1;
-        else
-            right = mid - 1;
-    }
-    return -1;
-}
+//     while (left <= right)
+//     {
+//         int mid = left + (right - left) / 2;
+//         if (arr[mid] == target)
+//             return mid;
+//         else if (arr[mid] < target)
+//             left = mid + 1;
+//         else
+//             right = mid - 1;
+//     }
+//     return -1;
+// }
 
-int x = 5;
-int y = x + 4;
+// int x = 5;
+// int y = x + 4;
 
-var arr = new int[] { 1, 3, 5, 7, 9 };
-var arr2 = arr
-    .Where(x => {return x > 5;})
-    .Select(x => x *2)
-    .ToList();
+// var arr = new int[] { 1, 3, 5, 7, 9 };
+// var arr2 = arr
+//     .Where(x => {return x > 5;})
+//     .Select(x => x *2)
+//     .ToList();
 
 
 

@@ -4,11 +4,12 @@ import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import * as path from 'path';
 
+type AnyEvent = { type?: 'line' | 'callStart' | 'callEnd'; line?: number; method?: string; variables?: Record<string, unknown>; __seq: number };
 type ProbeEntry = { line: number; variables: Record<string, unknown> };
 type ExtendedProbeEntry = ProbeEntry & { __seq: number };
 
 const state = {
-  lastResults: new Map<string, ExtendedProbeEntry[]>(),
+  lastResults: new Map<string, AnyEvent[]>(),
   session: null as null | {
     doc: vscode.TextDocument,
     disposables: vscode.Disposable[],
@@ -110,7 +111,7 @@ class InsightorInlayProvider implements vscode.InlayHintsProvider {
 
   provideInlayHints(document: vscode.TextDocument, range: vscode.Range, token: vscode.CancellationToken): vscode.ProviderResult<vscode.InlayHint[]> {
     const key = document.uri.toString();
-    const entries = getFilteredEntries(document);
+    const entries = getFilteredLineEntries(document);
     const hints: vscode.InlayHint[] = [];
     const byLine = new Map<number, ExtendedProbeEntry[]>();
     for (const e of entries) {
@@ -193,12 +194,22 @@ async function runInsightorNow(context: vscode.ExtensionContext, provider: Insig
       await execDotnet([state.session.builtDllPath, tempPath, outPath], path.dirname(cliProj));
     }
     const content = (await vscode.workspace.fs.readFile(vscode.Uri.file(outPath))).toString();
-    const entries: ExtendedProbeEntry[] = content.split(/\r?\n/)
+    const events: AnyEvent[] = content.split(/\r?\n/)
       .filter(Boolean)
-      .map((l, i) => ({ ...(JSON.parse(l) as ProbeEntry), __seq: i }));
-    state.lastResults.set(doc.uri.toString(), entries);
+      .map((l, i) => {
+        const raw: any = JSON.parse(l);
+        const type = (raw?.type as AnyEvent['type']) ?? 'line';
+        if (type === 'line') {
+          return { type, line: raw.line as number, variables: (raw.variables ?? {}) as Record<string, unknown>, __seq: i } as AnyEvent;
+        }
+        if (type === 'callStart' || type === 'callEnd') {
+          return { type, method: String(raw.method ?? ''), line: raw.line as number | undefined, __seq: i } as AnyEvent;
+        }
+        return { type: 'line', line: raw.line as number, variables: (raw.variables ?? {}) as Record<string, unknown>, __seq: i } as AnyEvent;
+      });
+    state.lastResults.set(doc.uri.toString(), events);
     provider.refresh(doc);
-    updateTimelineWebview(entries);
+    updateTimelineWebview(events);
   } catch (err: any) {
     vscode.window.showErrorMessage('Insightor failed: ' + (err?.message ?? String(err)));
   } finally {
@@ -216,11 +227,12 @@ function execDotnet(args: string[], cwd: string): Promise<void> {
   });
 }
 
-function getFilteredEntries(document: vscode.TextDocument): ExtendedProbeEntry[] {
+function getFilteredLineEntries(document: vscode.TextDocument): ExtendedProbeEntry[] {
   const key = document.uri.toString();
   const entries = state.lastResults.get(key) ?? [];
   const range = state.session?.range ?? { start: 0, end: Number.MAX_SAFE_INTEGER };
-  return entries.filter(e => e.__seq >= range.start && e.__seq <= range.end);
+  const filtered = entries.filter(e => e.__seq >= range.start && e.__seq <= range.end && (e.type ?? 'line') === 'line' && e.line != null && e.variables != null);
+  return filtered.map(e => ({ line: e.line as number, variables: e.variables as Record<string, unknown>, __seq: e.__seq }));
 }
 
 function openOrRevealTimeline(context: vscode.ExtensionContext, provider: InsightorInlayProvider) {
@@ -250,11 +262,45 @@ function openOrRevealTimeline(context: vscode.ExtensionContext, provider: Insigh
   updateTimelineWebview(entries);
 }
 
-function updateTimelineWebview(entries: ExtendedProbeEntry[]) {
+function updateTimelineWebview(events: AnyEvent[]) {
   if (!state.timelinePanel) return;
-  const total = entries.length;
+  const total = Math.max(0, (state.lastResults.get(state.session?.doc.uri.toString() ?? '') ?? []).length);
   const range = state.session?.range ?? { start: 0, end: Math.max(0, total - 1) };
-  state.timelinePanel.webview.postMessage({ type: 'data', total, range });
+  const frames = buildFrames(events);
+  state.timelinePanel.webview.postMessage({ type: 'frames', total, range, frames });
+}
+
+type Frame = { id: number; method: string; start: number; end: number; depth: number; line?: number };
+function buildFrames(events: AnyEvent[]): Frame[] {
+  const frames: Frame[] = [];
+  const stack: { method: string; start: number; line?: number }[] = [];
+  let nextId = 1;
+  for (const ev of events) {
+    const t = ev.type ?? 'line';
+    if (t === 'callStart') {
+      const m = String(ev.method ?? '');
+      stack.push({ method: m, start: ev.__seq, line: ev.line });
+    } else if (t === 'callEnd') {
+      const m = String(ev.method ?? '');
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].method === m) {
+          const depth = i;
+          const start = stack[i].start;
+          const line = stack[i].line;
+          frames.push({ id: nextId++, method: m, start, end: ev.__seq, depth, line });
+          stack.splice(i, 1);
+          break;
+        }
+      }
+    }
+  }
+  // Close any unclosed frames at end
+  const lastSeq = events.length > 0 ? events[events.length - 1].__seq : 0;
+  for (let i = 0; i < stack.length; i++) {
+    const f = stack[i];
+    frames.push({ id: nextId++, method: f.method, start: f.start, end: lastSeq, depth: i, line: f.line });
+  }
+  return frames;
 }
 
 function getTimelineHtml(): string {
@@ -265,70 +311,66 @@ function getTimelineHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
-    .wrap { padding: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-    .bar { position: relative; width: 32px; height: 320px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
-    .notches { position: absolute; left: 14px; top: 4px; bottom: 4px; width: 4px; }
-    .notches div { position: absolute; left: 0; width: 4px; height: 2px; background: var(--vscode-focusBorder); opacity: 0.6; }
-    .range { position: absolute; left: 0; right: 0; background: var(--vscode-editorHoverWidget-background); opacity: 0.35; }
-    .handle { position: absolute; left: 0; right: 0; height: 8px; background: var(--vscode-focusBorder); cursor: ns-resize; }
+    .wrap { padding: 12px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
     .info { font-size: 12px; opacity: 0.8; }
+    .timeline { position: relative; width: 100%; height: 320px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: auto; }
+    .bar { position: absolute; border-radius: 3px; background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-panel-border); cursor: pointer; display: flex; align-items: flex-start; justify-content: flex-start; }
+    .bar:hover { outline: 1px solid var(--vscode-focusBorder); }
+    .label { font-size: 11px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tickH { position: absolute; left: 0; right: 0; height: 1px; background: var(--vscode-panel-border); opacity: 0.4; }
   </style>
   </head>
   <body>
     <div class="wrap">
       <div id="info" class="info"></div>
-      <div id="bar" class="bar">
-        <div id="notches" class="notches"></div>
-        <div id="range" class="range"></div>
-        <div id="start" class="handle"></div>
-        <div id="end" class="handle"></div>
-      </div>
+      <div id="timeline" class="timeline"></div>
     </div>
     <script>
       const vscode = acquireVsCodeApi();
-      let total = 0; let start = 0; let end = 0;
-      const bar = document.getElementById('bar');
-      const notches = document.getElementById('notches');
-      const range = document.getElementById('range');
-      const hStart = document.getElementById('start');
-      const hEnd = document.getElementById('end');
+      let total = 0; let start = 0; let end = 0; let frames = [];
+      const timeline = document.getElementById('timeline');
       const info = document.getElementById('info');
 
       window.addEventListener('message', (e) => {
         const msg = e.data;
-        if (msg.type === 'data') {
-          total = msg.total || 0;
-          start = Math.max(0, Math.min(total-1, (msg.range?.start ?? 0)));
-          end = Math.max(start, Math.min(total-1, (msg.range?.end ?? (total-1))));
-          render();
-        }
+        if (msg.type === 'frames') { total = msg.total || 0; start = clampIndex(msg.range?.start ?? 0); end = clampIndex(msg.range?.end ?? (total-1)); frames = Array.isArray(msg.frames) ? msg.frames : []; render(); }
       });
 
       function render() {
-        const h = bar.clientHeight || 320;
-        notches.innerHTML = '';
-        if (total > 0) {
-          const step = Math.max(1, Math.floor(total / Math.max(40, Math.min(160, h/6))));
-          for (let i=0;i<total;i+=step){ const d=document.createElement('div'); d.style.top = ((i)/(total-1))*100+'%'; notches.appendChild(d);}  
+        timeline.innerHTML = '';
+        const height = timeline.clientHeight || 320;
+        const width = timeline.clientWidth || 600;
+        const visible = frames;
+        const padY = 8; const padX = 8; const columnWidth = 180; const gapX = 12;
+        const maxDepth = visible.reduce((m,f)=>Math.max(m,f.depth||0),0);
+        // ticks (horizontal)
+        const tickStep = Math.max(1, Math.floor(total / 20));
+        for (let i = 0; i <= total; i += tickStep) {
+          const t = document.createElement('div'); t.className = 'tickH'; t.style.top = (posY(i, height, padY)) + 'px'; timeline.appendChild(t);
         }
-        const ys = posFor(start), ye = posFor(end);
-        range.style.top = ys+'px';
-        range.style.height = Math.max(2, ye-ys)+'px';
-        hStart.style.top = (ys-4)+'px';
-        hEnd.style.top = (ye-4)+'px';
-        info.textContent = total>0 ? 
-          'Probes: '+total+'   Range: ['+start+'..'+end+'] ('+(end-start+1)+' entries)' : 'No probe data yet';
+        for (const f of visible) {
+          const colX = padX + f.depth * columnWidth;
+          const bar = document.createElement('div'); bar.className = 'bar';
+          const y1 = posY(f.start, height, padY); const y2 = posY(Math.max(f.end, f.start+1), height, padY);
+          bar.style.left = colX + 'px'; bar.style.top = y1 + 'px'; bar.style.width = (columnWidth - gapX) + 'px'; bar.style.height = Math.max(2, y2 - y1) + 'px';
+          bar.title = f.method + (f.line ? (' @ L' + f.line) : '');
+          const label = document.createElement('div'); label.className = 'label'; label.textContent = f.method;
+          bar.appendChild(label);
+          bar.addEventListener('click', (e)=>{ e.stopPropagation(); const s = clampIndex(f.start); const ee = clampIndex(f.end); start = s; end = ee; vscode.postMessage({ type: 'updateRange', start: s, end: ee }); highlightSelection(height, padY); });
+          timeline.appendChild(bar);
+        }
+        // spacer to extend scrollable width for deep stacks
+        const spacer = document.createElement('div'); spacer.style.position='absolute'; spacer.style.left=(padX + (maxDepth+1)*columnWidth)+'px'; spacer.style.top='0'; spacer.style.width='1px'; spacer.style.height='1px'; spacer.style.pointerEvents='none'; timeline.appendChild(spacer);
+        highlightSelection(height, padY);
+        info.textContent = total>0 ? 'Events: '+total+'   Range: ['+start+'..'+end+'] ('+(end-start+1)+' entries)' : 'No event data yet';
       }
+      function posY(index, height, padY) { if (total <= 1) return padY; const h = Math.max(1, height - padY*2); return Math.round(padY + (index/(total-1))*h); }
+      function clampIndex(i) { return Math.max(0, Math.min((total>0?total-1:0), Math.floor(i))); }
 
-      function posFor(index){ const h=bar.clientHeight||320; if(total<=1) return 0; return Math.round((index/(total-1))*h); }
-      function indexFor(py){ const h=bar.clientHeight||320; if(h<=0||total<=1) return 0; return Math.round((py/h)*(total-1)); }
-
-      function bindDrag(el, onMove){ let dragging=false; el.addEventListener('mousedown',e=>{dragging=true; e.preventDefault();}); window.addEventListener('mousemove',e=>{ if(!dragging) return; onMove(e.clientY); vscode.postMessage({type:'updateRange', start, end}); }); window.addEventListener('mouseup',()=>{ dragging=false; }); }
-      bindDrag(hStart, (cy)=>{ const rect=bar.getBoundingClientRect(); const idx=indexFor(cy-rect.top); start = Math.max(0, Math.min(end, idx)); render(); });
-      bindDrag(hEnd, (cy)=>{ const rect=bar.getBoundingClientRect(); const idx=indexFor(cy-rect.top); end = Math.max(start, Math.min(total-1, idx)); render(); });
-
-      // Click to jump
-      bar.addEventListener('click', (e)=>{ const rect=bar.getBoundingClientRect(); const idx=indexFor(e.clientY-rect.top); const ds=Math.abs(idx-start), de=Math.abs(idx-end); if(ds<de){ start = Math.min(idx,end); } else { end = Math.max(idx,start); } render(); vscode.postMessage({type:'updateRange', start, end}); });
+      function highlightSelection(height, padY) {
+        const sel = document.createElement('div'); sel.style.position = 'absolute'; sel.style.left = '0'; sel.style.right = '0'; sel.style.top = posY(start, height, padY)+'px'; sel.style.height = Math.max(2, posY(end, height, padY)-posY(start, height, padY))+'px'; sel.style.background='var(--vscode-editorHoverWidget-background)'; sel.style.opacity='0.2'; sel.style.pointerEvents='none';
+        timeline.appendChild(sel);
+      }
     </script>
   </body>
   </html>`;

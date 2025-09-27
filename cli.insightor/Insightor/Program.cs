@@ -174,6 +174,11 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
     {
         // Build from original members so semantic model nodes match
         var newMembers = new List<MemberDeclarationSyntax>();
+        // Emit a synthetic root call start for top-level program
+        {
+            var startRoot = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, "Program", 1));
+            newMembers.Add(SyntaxFactory.GlobalStatement(startRoot));
+        }
         foreach (var member in node.Members)
         {
             if (member is GlobalStatementSyntax gs)
@@ -190,6 +195,11 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             {
                 newMembers.Add((MemberDeclarationSyntax)base.Visit(member)!);
             }
+        }
+        // Emit a synthetic root call end for top-level program
+        {
+            var endRoot = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, "Program", Math.Max(1, node.GetLocation().GetLineSpan().EndLinePosition.Line + 1)));
+            newMembers.Add(SyntaxFactory.GlobalStatement(endRoot));
         }
         return node.WithMembers(SyntaxFactory.List(newMembers));
     }
@@ -220,6 +230,112 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             if (probeAfter is not null) newStatements.Add(probeAfter);
         }
         return node.WithStatements(SyntaxFactory.List(newStatements));
+    }
+
+    public override SyntaxNode? VisitMethodDeclaration(MethodDeclarationSyntax node)
+    {
+        // Visit children first to preserve existing instrumentation inside method body
+        var visited = (MethodDeclarationSyntax)base.VisitMethodDeclaration(node)!;
+
+        var methodSymbol = _semanticModel.GetDeclaredSymbol(node) as IMethodSymbol;
+        string methodId = methodSymbol is null ? node.Identifier.Text : GetMethodDisplayName(methodSymbol);
+        int methodLine = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+
+        // Handle expression-bodied methods by converting to a block wrapped in try/finally
+        if (visited.ExpressionBody is not null)
+        {
+            // Build: { __Probe.CallStart(methodId, line); try { return <expr>; } finally { __Probe.CallEnd(methodId, line); } }
+            var startInv = CreateCallInvocation(true, methodId, methodLine);
+            var endInv = CreateCallInvocation(false, methodId, methodLine);
+            var tryBlock = SyntaxFactory.Block(
+                SyntaxFactory.ReturnStatement(visited.ExpressionBody.Expression)
+            );
+            var finallyBlock = SyntaxFactory.Block(SyntaxFactory.ExpressionStatement(endInv));
+            var tryFinally = SyntaxFactory.TryStatement(tryBlock, default, SyntaxFactory.FinallyClause(finallyBlock));
+            var newBody = SyntaxFactory.Block(
+                SyntaxFactory.ExpressionStatement(startInv),
+                tryFinally
+            );
+            return visited.WithBody(newBody).WithExpressionBody(null).WithSemicolonToken(default);
+        }
+
+        if (visited.Body is null)
+        {
+            return visited;
+        }
+
+        // Wrap existing body in try/finally with CallStart/CallEnd
+        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine));
+        var endCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, methodId, methodLine));
+        var tryBody = SyntaxFactory.Block(visited.Body.Statements);
+        var finallyBody = SyntaxFactory.Block(endCall);
+        var wrapped = SyntaxFactory.Block(
+            startCall,
+            SyntaxFactory.TryStatement(tryBody, default, SyntaxFactory.FinallyClause(finallyBody))
+        );
+        return visited.WithBody(wrapped);
+    }
+
+    public override SyntaxNode? VisitConstructorDeclaration(ConstructorDeclarationSyntax node)
+    {
+        var visited = (ConstructorDeclarationSyntax)base.VisitConstructorDeclaration(node)!;
+        int methodLine = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+        var methodSymbol = _semanticModel.GetDeclaredSymbol(node) as IMethodSymbol;
+        string methodId = methodSymbol is null ? node.Identifier.Text : GetMethodDisplayName(methodSymbol);
+
+        if (visited.Body is null)
+        {
+            return visited;
+        }
+
+        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine));
+        var endCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, methodId, methodLine));
+        var tryBody = SyntaxFactory.Block(visited.Body.Statements);
+        var finallyBody = SyntaxFactory.Block(endCall);
+        var wrapped = SyntaxFactory.Block(
+            startCall,
+            SyntaxFactory.TryStatement(tryBody, default, SyntaxFactory.FinallyClause(finallyBody))
+        );
+        return visited.WithBody(wrapped);
+    }
+
+    public override SyntaxNode? VisitLocalFunctionStatement(LocalFunctionStatementSyntax node)
+    {
+        var visited = (LocalFunctionStatementSyntax)base.VisitLocalFunctionStatement(node)!;
+        int methodLine = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+        var symbol = _semanticModel.GetDeclaredSymbol(node) as IMethodSymbol;
+        string methodId = symbol is null ? node.Identifier.Text : GetMethodDisplayName(symbol);
+
+        if (visited.ExpressionBody is not null)
+        {
+            var startInv = CreateCallInvocation(true, methodId, methodLine);
+            var endInv = CreateCallInvocation(false, methodId, methodLine);
+            var tryBlock = SyntaxFactory.Block(
+                SyntaxFactory.ReturnStatement(visited.ExpressionBody.Expression)
+            );
+            var finallyBlock = SyntaxFactory.Block(SyntaxFactory.ExpressionStatement(endInv));
+            var tryFinally = SyntaxFactory.TryStatement(tryBlock, default, SyntaxFactory.FinallyClause(finallyBlock));
+            var newBody = SyntaxFactory.Block(
+                SyntaxFactory.ExpressionStatement(startInv),
+                tryFinally
+            );
+            return visited.WithBody(newBody).WithExpressionBody(null).WithSemicolonToken(default);
+        }
+
+        if (visited.Body is null)
+        {
+            return visited;
+        }
+
+        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine));
+        var endCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, methodId, methodLine));
+        var tryBody = SyntaxFactory.Block(visited.Body.Statements);
+        var finallyBody = SyntaxFactory.Block(endCall);
+        var wrapped = SyntaxFactory.Block(
+            startCall,
+            SyntaxFactory.TryStatement(tryBody, default, SyntaxFactory.FinallyClause(finallyBody))
+        );
+        return visited.WithBody(wrapped);
     }
 
     public override SyntaxNode? VisitIfStatement(IfStatementSyntax node)
@@ -557,6 +673,32 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
                 SyntaxFactory.IdentifierName("Line")))
             .WithArgumentList(SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(args)));
     }
+
+    private static InvocationExpressionSyntax CreateCallInvocation(bool isStart, string methodId, int line)
+    {
+        var methodName = isStart ? "CallStart" : "CallEnd";
+        var args = new List<ArgumentSyntax>
+        {
+            SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(methodId))),
+            SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(SyntaxKind.NumericLiteralExpression, SyntaxFactory.Literal(line)))
+        };
+        return SyntaxFactory.InvocationExpression(
+            SyntaxFactory.MemberAccessExpression(
+                SyntaxKind.SimpleMemberAccessExpression,
+                SyntaxFactory.QualifiedName(SyntaxFactory.IdentifierName("__Insightor"), SyntaxFactory.IdentifierName("__Probe")),
+                SyntaxFactory.IdentifierName(methodName)))
+            .WithArgumentList(SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(args)));
+    }
+
+    private static string GetMethodDisplayName(IMethodSymbol symbol)
+    {
+        // Example: Namespace.Type.Method(paramType1, paramType2)
+        var containing = symbol.ContainingType?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "";
+        var method = symbol.Name;
+        var parms = string.Join(", ", symbol.Parameters.Select(p => p.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
+        var qual = string.IsNullOrEmpty(containing) ? method : containing + "." + method;
+        return parms.Length > 0 ? $"{qual}({parms})" : $"{qual}()";
+    }
 }
 
 static class ProbeSource
@@ -608,9 +750,38 @@ namespace __Insightor
                 }
                 var payload = new
                 {
+                    type = "line",
                     line,
                     variables = dict
                 };
+                string json = JsonSerializer.Serialize(payload);
+                lock (_lock)
+                {
+                    Writer.WriteLine(json);
+                }
+            }
+            catch { /* swallow */ }
+        }
+
+        public static void CallStart(string method, int line)
+        {
+            try
+            {
+                var payload = new { type = "callStart", method, line, variables = new Dictionary<string, object?>() };
+                string json = JsonSerializer.Serialize(payload);
+                lock (_lock)
+                {
+                    Writer.WriteLine(json);
+                }
+            }
+            catch { /* swallow */ }
+        }
+
+        public static void CallEnd(string method, int line)
+        {
+            try
+            {
+                var payload = new { type = "callEnd", method, line, variables = new Dictionary<string, object?>() };
                 string json = JsonSerializer.Serialize(payload);
                 lock (_lock)
                 {
