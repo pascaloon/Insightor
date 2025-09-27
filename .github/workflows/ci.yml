@@ -1,0 +1,45 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore CLI
+        working-directory: cli.insightor
+        run: dotnet restore Insightor/Insightor.csproj | cat
+
+      - name: Build CLI (Release)
+        working-directory: cli.insightor
+        run: dotnet build Insightor/Insightor.csproj --configuration Release --no-restore | cat
+
+      - name: Run unit tests
+        working-directory: cli.insightor
+        run: dotnet test Insightor.Tests/Insightor.Tests.csproj --configuration Release --no-build --verbosity normal | cat
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install extension dependencies
+        working-directory: code.insightor/insightor
+        run: npm ci | cat
+
+      - name: Compile VS Code extension
+        working-directory: code.insightor/insightor
+        run: npm run --silent compile | cat
+
