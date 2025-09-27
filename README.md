@@ -3,6 +3,7 @@
 C# algorithm exploration toolkit with a Roslyn-powered CLI instrumenter and a VS Code extension that overlays live variable values as inlay hints. A small sample app is included.
 
 ## Apps
+
 - VS Code Extension: `code.insightor/insightor`
 - CLI Instrumenter: `cli.insightor/Insightor`
 - Sample snippets: `Sample/`
@@ -10,6 +11,7 @@ C# algorithm exploration toolkit with a Roslyn-powered CLI instrumenter and a VS
 ## Features
 
 ### CLI (Instrumentation & Probes)
+
 - Roslyn-based rewriting inserts probes to capture runtime values:
   - Local declarations: declared variables plus referenced identifiers in initializers
   - Expression statements
@@ -27,6 +29,7 @@ C# algorithm exploration toolkit with a Roslyn-powered CLI instrumenter and a VS
 - Implicit usings + platform references so simple programs compile directly
 
 ### VS Code Extension (Inlays, Sessions, Timeline)
+
 - Inlay hints at end of each line
   - Variables in a probe are comma-separated; multiple probes on a line are joined by `|`
   - Special display for `return: {value}`
@@ -42,14 +45,26 @@ C# algorithm exploration toolkit with a Roslyn-powered CLI instrumenter and a VS
   - Inlays are filtered to the selected probe range
 
 ### Commands (VS Code)
+
 - Insightor: Start Session
 - Insightor: Restart Session
 - Insightor: Stop Session
 - Insightor: Show Timeline
+- Insightor: Show Variables Table
+- Insightor: Show Call Graph
+- Insightor: Show Animator
+
+## What's New
+
+- Call Graph view: visualize nested method calls over the selected range with argument and return annotations; click nodes in the timeline to filter.
+- Variables Table: pivot variables for selected lines into a table across probe steps.
+- Animator: play, pause, step through probes; highlights current line and filters inlays to the active step.
+- Timeline improvements: draggable range handles, richer hover tooltips with method arguments, clearer labeling.
+- CLI probe enhancements: parameter bindings included in call start/end events; improved return value handling.
 
 ## Architecture
 
-```
+```text
 +---------------------------+            +-----------------------+
 | VS Code Extension         |            | CLI (dotnet / Roslyn) |
 |  - Session Manager        |  dotnet    |  - Program.cs         |
@@ -66,36 +81,42 @@ C# algorithm exploration toolkit with a Roslyn-powered CLI instrumenter and a VS
 ## How to Use
 
 ### Prerequisites
+
 - .NET SDK 9 (CLI/tests)
 - Node.js 18+ (extension build)
 - VS Code 1.104+
 
 ### Build & Test CLI
-```
+
+```bash
 dotnet build .\cli.insightor\Insightor\Insightor.csproj -c Debug
 
 dotnet test .\cli.insightor\Insightor.Tests\Insightor.Tests.csproj -v minimal
 ```
 
 ### Run CLI Manually
-```
+
+```bash
 # dotnet run --project <csproj> -- <input.cs> <output.jsonl>
 
 dotnet run --project .\cli.insightor\Insightor\Insightor.csproj -- .\Sample\Program.cs .\.out.jsonl
 ```
 
 ### Build the Extension
-```
+
+```bash
 cd code.insightor/insightor
 npm install
 npm run compile
 ```
 
 ### Launch in VS Code
+
 - Open the repo in VS Code
 - Press F5 to start an Extension Development Host
 
 ### Workflow
+
 1. Open a C# file
 2. Run “Insightor: Start Session”
    - Extension writes a temp copy and runs the CLI; inlays appear
@@ -104,11 +125,17 @@ npm run compile
 5. “Restart Session” to reset; “Stop Session” to stop
 
 ### Inlay Format
+
 - Per probe: `a: 1, b: 2`
 - Multiple probes on a line: `a: 1 | b: 2, return: 3`
 
+## Contributors (last 180 days)
+
+- passelin <pascalasselin@hotmail.com>
+
 ## Repository Layout
-```
+
+```text
 Insightor/
 ├─ README.md
 ├─ cli.insightor/
@@ -128,5 +155,6 @@ Insightor/
 ```
 
 ## Troubleshooting
+
 - Intermittent Windows build locks: re-run tests; extension uses `--no-build` after first build.
 - If inlays don’t show: confirm CLI build succeeded and a session is running for the active file.

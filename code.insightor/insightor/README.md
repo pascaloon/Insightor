@@ -1,71 +1,54 @@
-# insightor README
+# Insightor – VS Code Extension
 
-This is the README for your extension "insightor". After writing up a brief description, we recommend including the following sections.
+C# algorithm helper that surfaces live variable values as inlay hints while you run instrumented code. Includes rich timeline, variables table, call graph, and an animator for stepping through execution.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- Inlay hints appended to each line showing current variable values and return values
+- Session-based runs: edits re-run automatically against a temp buffer
+- Timeline panel with draggable range selection and annotated bars per call
+- Variables Table panel that pivots variables for selected lines across steps
+- Call Graph panel that builds a hierarchical graph with argument and return annotations
+- Animator panel to play, pause, step next/prev, and adjust speed; highlights active line
 
-For example if there is an image subfolder under your extension project workspace:
+## Commands
 
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- `insightor.startSession` – Insightor: Start Session
+- `insightor.restartSession` – Insightor: Restart Session
+- `insightor.stopSession` – Insightor: Stop Session
+- `insightor.showTimeline` – Insightor: Show Timeline
+- `insightor.showVariablesTable` – Insightor: Show Variables Table
+- `insightor.showCallGraph` – Insightor: Show Call Graph
+- `insightor.showAnimator` – Insightor: Show Animator
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- .NET SDK 9 (used by the CLI instrumenter)
+- VS Code 1.104+
 
-## Extension Settings
+## Getting Started
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+1. Open a C# file
+2. Run “Insightor: Start Session”
+3. Use the timeline to adjust the visible event range
+4. Open Variables Table / Call Graph / Animator as needed
 
-For example:
+## Inlay Format
 
-This extension contributes the following settings:
+- Per probe: `a: 1, b: 2`
+- Multiple probes per line: `a: 1 | b: 2, return: 3`
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+## What's New
+
+- Added Variables Table view
+- Added Call Graph view with argument and return annotations
+- Added Animator with play/pause/step and speed control
+- Timeline hover tooltips now display method arguments
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- Requires a buildable C# project; errors in the source may prevent runs
 
-## Release Notes
+## License
 
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+MIT
