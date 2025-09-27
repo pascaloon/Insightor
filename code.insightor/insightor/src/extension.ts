@@ -550,7 +550,7 @@ function pushCallGraphData() {
   // Build edges by parent-child from frames nesting within selected range
   const nodes = new Map<number, { id: number, label: string, start: number, end: number }>();
   const edges: { from: number, to: number }[] = [];
-  const active = frames.filter(f => f.start >= range.start && f.end <= range.end);
+  const active = frames.filter(f => f.end >= range.start && f.start <= range.end);
   for (const f of active) {
     nodes.set(f.id, { id: f.id, label: f.method, start: f.start, end: f.end });
   }
@@ -586,8 +586,8 @@ function getCallGraphHtml(): string {
     body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
     .wrap { padding: 12px; }
     .graph { position: relative; width: 100%; height: 360px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: auto; background: var(--vscode-editorWidget-background); }
-    .node { position: absolute; min-width: 140px; max-width: 220px; padding: 6px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editorHoverWidget-background); font-size: 12px; }
-    .edge { position: absolute; height: 2px; background: var(--vscode-panel-border); transform-origin: 0 0; }
+    .node { position: absolute; width: 220px; padding: 6px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editorHoverWidget-background); font-size: 12px; }
+    .edge { position: absolute; height: 2px; background: var(--vscode-foreground); opacity: 0.5; transform-origin: 0 0; z-index: 0; }
     .title { font-weight: bold; margin-bottom: 4px; }
     .kv { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   </style>
@@ -611,7 +611,7 @@ function getCallGraphHtml(): string {
       function depthOf(id){ if(depthMap.has(id)) return depthMap.get(id); const parentEdge = edges.find(e=>e.to===id); if(!parentEdge){ depthMap.set(id,0); return 0;} const d = depthOf(parentEdge.from)+1; depthMap.set(id,d); return d; }
       nodes.forEach(n=>depthOf(n.id));
       const colX = d=> 20 + d*240;
-      const scaleY = s=> 20 + s*22; // stack vertically by order
+      const scaleY = s=> 20 + s*80; // increased row height to avoid overlap
       const order = nodes.slice().sort((a,b)=> a.start - b.start);
       const yMap = new Map(order.map((n,i)=>[n.id, scaleY(i)]));
       // draw nodes
@@ -629,13 +629,14 @@ function getCallGraphHtml(): string {
         el.style.borderColor = colorFor(n.label);
         graph.appendChild(el);
       }
-      // draw edges
+      // draw edges (behind nodes)
+      const edgeLayer = document.createElement('div'); edgeLayer.style.position='absolute'; edgeLayer.style.left='0'; edgeLayer.style.top='0'; edgeLayer.style.right='0'; edgeLayer.style.bottom='0'; edgeLayer.style.zIndex='0'; graph.appendChild(edgeLayer);
       for(const e of edges){
         const a = byId.get(e.from), b = byId.get(e.to); if(!a||!b) continue;
-        const x1 = colX(depthMap.get(a.id)) + 220, y1 = (yMap.get(a.id)||0) + 20;
-        const x2 = colX(depthMap.get(b.id)), y2 = (yMap.get(b.id)||0) + 20;
+        const x1 = colX(depthMap.get(a.id)) + 220 - 4, y1 = (yMap.get(a.id)||0) + 24; // start closer to node right edge center
+        const x2 = colX(depthMap.get(b.id)) + 4, y2 = (yMap.get(b.id)||0) + 24; // end slightly inside target left edge
         const dx = x2 - x1, dy = y2 - y1; const len=Math.hypot(dx,dy); const ang=Math.atan2(dy,dx)*180/Math.PI;
-        const edge = document.createElement('div'); edge.className='edge'; edge.style.left=x1+'px'; edge.style.top=y1+'px'; edge.style.width=len+'px'; edge.style.transform='rotate('+ang+'deg)'; graph.appendChild(edge);
+        const edge = document.createElement('div'); edge.className='edge'; edge.style.left=x1+'px'; edge.style.top=y1+'px'; edge.style.width=len+'px'; edge.style.transform='rotate('+ang+'deg)'; edgeLayer.appendChild(edge);
       }
     }
     function stringify(v){ try { if (v===null||v===undefined) return 'null'; if (typeof v==='object') return JSON.stringify(v); return String(v);} catch { return String(v);} }
