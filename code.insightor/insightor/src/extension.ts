@@ -19,6 +19,7 @@ const state = {
     range: { start: number; end: number },
   },
   timelinePanel: null as null | vscode.WebviewPanel,
+  variablesPanel: null as null | vscode.WebviewPanel,
 };
 
 // This method is called when your extension is activated
@@ -89,12 +90,17 @@ export function activate(context: vscode.ExtensionContext) {
 		openOrRevealTimeline(context, inlayProvider);
 	});
 
+	const showVariablesTable = vscode.commands.registerCommand('insightor.showVariablesTable', async () => {
+		openOrRevealVariablesTable(context, inlayProvider);
+	});
+
 	context.subscriptions.push(
 		vscode.languages.registerInlayHintsProvider({ language: 'csharp' }, inlayProvider),
 		startSession,
 		restartSession,
 		stopSession,
-		showTimeline
+		showTimeline,
+		showVariablesTable
 	);
 }
 
@@ -385,4 +391,119 @@ function getTimelineHtml(): string {
     </script>
   </body>
   </html>`;
+}
+
+function openOrRevealVariablesTable(context: vscode.ExtensionContext, provider: InsightorInlayProvider) {
+  if (state.variablesPanel) {
+    state.variablesPanel.reveal();
+    pushVariablesData();
+    return;
+  }
+  const panel = vscode.window.createWebviewPanel(
+    'insightorVariables',
+    'Insightor Variables Table',
+    vscode.ViewColumn.Beside,
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
+  state.variablesPanel = panel;
+  panel.onDidDispose(() => { state.variablesPanel = null; });
+  panel.webview.html = getVariablesHtml();
+  panel.webview.onDidReceiveMessage(msg => {
+    // currently no inbound messages
+  });
+  // React to selection changes to refresh table
+  const selSub = vscode.window.onDidChangeTextEditorSelection(e => {
+    if (!state.variablesPanel) return;
+    if (!state.session || e.textEditor.document.uri.toString() !== state.session.doc.uri.toString()) return;
+    pushVariablesData();
+  });
+  const closeSub = vscode.workspace.onDidCloseTextDocument(d => {
+    if (state.session?.doc.uri.toString() === d.uri.toString()) {
+      pushVariablesData();
+    }
+  });
+  state.session?.disposables.push(selSub, closeSub);
+  // Seed
+  pushVariablesData();
+}
+
+function pushVariablesData() {
+  if (!state.variablesPanel || !state.session) return;
+  const doc = state.session.doc;
+  const entries = getFilteredLineEntries(doc);
+  const byLine = new Map<number, ExtendedProbeEntry[]>();
+  for (const e of entries) {
+    const idx = e.line - 1;
+    if (!byLine.has(idx)) byLine.set(idx, []);
+    byLine.get(idx)!.push(e);
+  }
+  const selections = vscode.window.activeTextEditor?.selections ?? [];
+  const selectedLines = new Set<number>();
+  for (const sel of selections) {
+    for (let i = sel.start.line; i <= sel.end.line; i++) selectedLines.add(i);
+  }
+  // Active lines are those with inlays visible in current range and also selected lines
+  const activeSelectedLines = Array.from(selectedLines).filter(l => byLine.has(l)).sort((a,b)=>a-b);
+  const tables = activeSelectedLines.map(lineIdx => buildTableModel(lineIdx, byLine.get(lineIdx)!));
+  state.variablesPanel.webview.postMessage({ type: 'tables', tables });
+}
+
+function buildTableModel(lineIdx: number, probes: ExtendedProbeEntry[]) {
+  // Columns: iteration index (seq); Rows: union of variable names across probes
+  const varSet = new Set<string>();
+  for (const p of probes) for (const k of Object.keys(p.variables)) varSet.add(k);
+  const varNames = Array.from(varSet).sort();
+  const cols = probes.map(p => p.__seq);
+  const rows = varNames.map(name => ({ name, values: probes.map(p => formatValue(p.variables[name])) }));
+  return { line: lineIdx+1, cols, rows };
+}
+
+function getVariablesHtml(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
+    .wrap { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+    .table { border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: auto; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid var(--vscode-panel-border); padding: 4px 6px; font-size: 12px; }
+    th { background: var(--vscode-editorWidget-background); position: sticky; top: 0; z-index: 1; }
+    .title { font-weight: bold; font-size: 12px; opacity: 0.9; }
+    .empty { opacity: 0.7; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="host"></div>
+  </div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    const host = document.getElementById('host');
+    window.addEventListener('message', e => { const msg = e.data; if (msg.type === 'tables') render(msg.tables||[]); });
+    function render(tables){
+      host.innerHTML = '';
+      if (!tables.length){ const d=document.createElement('div'); d.className='empty'; d.textContent='No selected active lines.'; host.appendChild(d); return; }
+      for (const t of tables) {
+        const block = document.createElement('div');
+        const title = document.createElement('div'); title.className='title'; title.textContent = 'Line ' + t.line;
+        const wrap = document.createElement('div'); wrap.className = 'table';
+        const tbl = document.createElement('table');
+        const thead = document.createElement('thead'); const thr = document.createElement('tr');
+        const th0 = document.createElement('th'); th0.textContent = 'Variable'; thr.appendChild(th0);
+        for (const c of t.cols){ const th=document.createElement('th'); th.textContent = String(c); thr.appendChild(th); }
+        thead.appendChild(thr); tbl.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        for (const row of t.rows){ const tr = document.createElement('tr'); const td0=document.createElement('td'); td0.textContent=row.name; tr.appendChild(td0); for (const v of row.values){ const td=document.createElement('td'); td.textContent = v==null?'' : String(v); tr.appendChild(td);} tbody.appendChild(tr);} 
+        tbl.appendChild(tbody);
+        wrap.appendChild(tbl);
+        block.appendChild(title); block.appendChild(wrap);
+        host.appendChild(block);
+      }
+    }
+  </script>
+</body>
+</html>`;
 }

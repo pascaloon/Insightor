@@ -2,6 +2,7 @@
 {
     if (x <= 1)
         return 1;
+
     return x * Fact(x - 1);
 }
 
@@ -23,10 +24,10 @@ int z2 = Add(a*2, b*2);
 
 for (int i = 0; i < 5; i++)
 {
-    a = Add(a, 2);
+    a = Add(a, i);
 }
 
-int z3 = Fact(3);
+int z3 = Fact(6);
 
 
 // int a = 2;

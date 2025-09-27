@@ -12,7 +12,9 @@
   "activationEvents": [
     "onCommand:insightor.startSession",
     "onCommand:insightor.restartSession",
-    "onCommand:insightor.stopSession"
+    "onCommand:insightor.stopSession",
+    "onCommand:insightor.showTimeline",
+    "onCommand:insightor.showVariablesTable"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -32,6 +34,10 @@
       {
         "command": "insightor.showTimeline",
         "title": "Insightor: Show Timeline"
+      },
+      {
+        "command": "insightor.showVariablesTable",
+        "title": "Insightor: Show Variables Table"
       }
     ]
   },
