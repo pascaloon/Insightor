@@ -370,7 +370,9 @@ function getTimelineHtml(): string {
           bar.style.left = colX + 'px'; bar.style.top = y1 + 'px'; bar.style.width = thinW + 'px'; bar.style.height = Math.max(2, y2 - y1) + 'px';
           // Build tooltip with arguments if available
           const argsTip = f.args ? Object.entries(f.args).map(([k,v])=>k+': '+stringify(v)).join(', ') : '';
-          bar.title = f.method + (f.line ? (' @ L' + f.line) : '') + (argsTip? (' | '+argsTip):'');
+          const pidx = f.method.indexOf('(');
+          const base = pidx >= 0 ? f.method.slice(0, pidx) : f.method;
+          bar.title = base + '(' + argsTip + ')' + (f.line ? (' @ L' + f.line) : '');
           bar.addEventListener('click', (e)=>{ e.stopPropagation(); const s = clampIndex(f.start); const ee = clampIndex(f.end); start = s; end = ee; activeId = f.id; vscode.postMessage({ type: 'updateRange', start: s, end: ee }); render(); });
           // Color and active state
           const selected = frames.find(ff => ff.id === activeId);
@@ -615,10 +617,13 @@ function getCallGraphHtml(): string {
       // draw nodes
       for(const n of nodes){
         const el = document.createElement('div'); el.className='node'; el.style.left = colX(depthMap.get(n.id))+'px'; el.style.top = (yMap.get(n.id)||0)+'px';
-        const t = document.createElement('div'); t.className='title'; t.textContent = n.label;
-        el.appendChild(t);
+        const t = document.createElement('div'); t.className='title';
         const ann = annotations[n.id]||{args:{}};
-        for (const [k,v] of Object.entries(ann.args||{})) { const kv=document.createElement('div'); kv.className='kv'; kv.textContent = k+': '+stringify(v); el.appendChild(kv); }
+        const pidx = n.label.indexOf('(');
+        const base = pidx >= 0 ? n.label.slice(0, pidx) : n.label;
+        const argsInline = Object.entries(ann.args||{}).map(([k,v])=> k+': '+stringify(v)).join(', ');
+        t.textContent = base + '(' + argsInline + ')';
+        el.appendChild(t);
         if ('ret' in ann) { const kv=document.createElement('div'); kv.className='kv'; kv.textContent = 'return: '+stringify(ann.ret); el.appendChild(kv); }
         // Border color consistent with timeline color
         el.style.borderColor = colorFor(n.label);

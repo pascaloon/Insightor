@@ -1,4 +1,6 @@
-﻿int Fact(int x)
+﻿
+
+int Fact(int x)
 {
     if (x <= 1)
         return 1;
@@ -29,6 +31,12 @@ for (int i = 0; i < 5; i++)
 
 int z3 = Fact(6);
 
+string Booboo(string a, int v)
+{
+    return $"{a} v";
+}
+
+Booboo("ha", 3);
 
 // int a = 2;
 // int b = 3;
