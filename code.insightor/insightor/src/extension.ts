@@ -21,6 +21,14 @@ const state = {
   timelinePanel: null as null | vscode.WebviewPanel,
   variablesPanel: null as null | vscode.WebviewPanel,
   callGraphPanel: null as null | vscode.WebviewPanel,
+  animatorPanel: null as null | vscode.WebviewPanel,
+  anim: {
+    playing: false,
+    speedMs: 600,
+    timer: null as NodeJS.Timeout | null,
+    cursorSeq: 0,
+    deco: null as vscode.TextEditorDecorationType | null,
+  }
 };
 
 // This method is called when your extension is activated
@@ -99,6 +107,10 @@ export function activate(context: vscode.ExtensionContext) {
 		openOrRevealCallGraph(context, inlayProvider);
 	});
 
+  const showAnimator = vscode.commands.registerCommand('insightor.showAnimator', async () => {
+    openOrRevealAnimator(context, inlayProvider);
+  });
+
 	context.subscriptions.push(
 		vscode.languages.registerInlayHintsProvider({ language: 'csharp' }, inlayProvider),
 		startSession,
@@ -106,7 +118,8 @@ export function activate(context: vscode.ExtensionContext) {
 		stopSession,
 		showTimeline,
 		showVariablesTable,
-		showCallGraph
+    showCallGraph,
+    showAnimator
 	);
 }
 
@@ -245,7 +258,12 @@ function getFilteredLineEntries(document: vscode.TextDocument): ExtendedProbeEnt
   const key = document.uri.toString();
   const entries = state.lastResults.get(key) ?? [];
   const range = state.session?.range ?? { start: 0, end: Number.MAX_SAFE_INTEGER };
-  const filtered = entries.filter(e => e.__seq >= range.start && e.__seq <= range.end && (e.type ?? 'line') === 'line' && e.line != null && e.variables != null);
+  let filtered = entries.filter(e => e.__seq >= range.start && e.__seq <= range.end && (e.type ?? 'line') === 'line' && e.line != null && e.variables != null);
+  // If animator playing/stepping, show only the current step's probe
+  if (state.anim.playing || state.anim.cursorSeq > 0) {
+    const curr = filtered.find(e => e.__seq >= state.anim.cursorSeq) ?? filtered[filtered.length - 1];
+    filtered = curr ? [curr] : [];
+  }
   return filtered.map(e => ({ line: e.line as number, variables: e.variables as Record<string, unknown>, __seq: e.__seq }));
 }
 
@@ -643,4 +661,171 @@ function getCallGraphHtml(): string {
   </script>
 </body>
 </html>`;
+}
+
+function openOrRevealAnimator(context: vscode.ExtensionContext, provider: InsightorInlayProvider) {
+  if (state.animatorPanel) {
+    state.animatorPanel.reveal();
+    pushAnimatorState();
+    return;
+  }
+  const panel = vscode.window.createWebviewPanel(
+    'insightorAnimator',
+    'Insightor Animator',
+    vscode.ViewColumn.Beside,
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
+  state.animatorPanel = panel;
+  panel.onDidDispose(() => { state.animatorPanel = null; stopAnimation(); clearAnimatorDecoration(); });
+  panel.webview.html = getAnimatorHtml();
+  panel.webview.onDidReceiveMessage(msg => {
+    if (!state.session) return;
+    if (msg?.type === 'play') { startAnimation(provider); }
+    if (msg?.type === 'pause') { pauseAnimation(); }
+    if (msg?.type === 'stop') { stopAnimation(provider); }
+    if (msg?.type === 'speed' && typeof msg.ms === 'number') { setAnimationSpeed(msg.ms, provider); }
+    if (msg?.type === 'stepNext') { stepAnimation(+1, provider); }
+    if (msg?.type === 'stepPrev') { stepAnimation(-1, provider); }
+  });
+  pushAnimatorState();
+}
+
+function getAnimatorHtml(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
+    .wrap { padding: 12px; display: flex; gap: 8px; align-items: center; }
+    button { padding: 4px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; cursor: pointer; }
+    button:hover { background: var(--vscode-button-hoverBackground); }
+    input[type=range] { width: 160px; }
+    .label { font-size: 12px; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <button id="play">Play</button>
+    <button id="pause">Pause</button>
+    <button id="stop">Stop</button>
+    <button id="prev">◀</button>
+    <button id="next">▶</button>
+    <span class="label">Speed (ms/step)</span>
+    <input id="speed" type="range" min="60" max="2000" step="20" />
+    <span id="info" class="label"></span>
+  </div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    const play=document.getElementById('play'); const pause=document.getElementById('pause'); const stop=document.getElementById('stop');
+    const prev=document.getElementById('prev'); const next=document.getElementById('next'); const speed=document.getElementById('speed'); const info=document.getElementById('info');
+    play.onclick=()=>vscode.postMessage({type:'play'});
+    pause.onclick=()=>vscode.postMessage({type:'pause'});
+    stop.onclick=()=>vscode.postMessage({type:'stop'});
+    next.onclick=()=>vscode.postMessage({type:'stepNext'});
+    prev.onclick=()=>vscode.postMessage({type:'stepPrev'});
+    speed.oninput=()=>vscode.postMessage({type:'speed', ms: Number(speed.value)});
+    window.addEventListener('message', e=>{ const msg=e.data; if(msg.type==='state'){ speed.value=String(msg.speedMs||600); info.textContent = 'Step: ' + (msg.cursorSeq ?? 0); } });
+  </script>
+</body>
+</html>`;
+}
+
+function pushAnimatorState() {
+  if (!state.animatorPanel) return;
+  state.animatorPanel.webview.postMessage({ type: 'state', speedMs: state.anim.speedMs, cursorSeq: state.anim.cursorSeq, playing: state.anim.playing });
+}
+
+function currentEntries(): AnyEvent[] {
+  if (!state.session) return [];
+  const all = state.lastResults.get(state.session.doc.uri.toString()) ?? [];
+  const range = state.session.range;
+  return all.filter(e => e.__seq >= range.start && e.__seq <= range.end);
+}
+
+function startAnimation(provider: InsightorInlayProvider) {
+  if (!state.session) return;
+  state.anim.playing = true;
+  if (state.anim.timer) clearInterval(state.anim.timer);
+  state.anim.timer = setInterval(() => stepAnimation(+1, provider), state.anim.speedMs);
+  pushAnimatorState();
+  provider.refresh(state.session.doc);
+}
+
+function pauseAnimation() {
+  state.anim.playing = false;
+  if (state.anim.timer) { clearInterval(state.anim.timer); state.anim.timer = null; }
+  pushAnimatorState();
+}
+
+function stopAnimation(provider?: InsightorInlayProvider) {
+  pauseAnimation();
+  // reset cursor to disable animator filtering
+  state.anim.cursorSeq = 0;
+  updateAnimatedView();
+  if (provider && state.session) provider.refresh(state.session.doc);
+}
+
+function setAnimationSpeed(ms: number, provider: InsightorInlayProvider) {
+  state.anim.speedMs = Math.max(20, Math.min(5000, Math.floor(ms)));
+  if (state.anim.playing) startAnimation(provider); else pushAnimatorState();
+}
+
+function stepAnimation(delta: number, provider: InsightorInlayProvider) {
+  if (!state.session) return;
+  const range = state.session.range;
+  const entries = currentEntries();
+  const lines = entries.filter(e => (e.type ?? 'line') === 'line' && typeof e.line === 'number');
+  if (lines.length === 0) return;
+  // find block for current cursor
+  let i = lines.findIndex(e => e.__seq >= state.anim.cursorSeq);
+  if (i < 0) i = lines.length - 1;
+  const currLine = lines[i].line as number;
+  let start = i; while (start - 1 >= 0 && (lines[start - 1].line as number) === currLine) start--;
+  let end = i; while (end + 1 < lines.length && (lines[end + 1].line as number) === currLine) end++;
+  if (delta > 0) {
+    if (state.anim.cursorSeq < lines[end].__seq) state.anim.cursorSeq = lines[end].__seq;
+    else if (end + 1 < lines.length) {
+      let j = end + 1; const nextLine = lines[j].line as number; while (j + 1 < lines.length && (lines[j + 1].line as number) === nextLine) j++; state.anim.cursorSeq = lines[j].__seq;
+    } else { state.anim.cursorSeq = Math.min(range.end, lines[end].__seq); }
+  } else if (delta < 0) {
+    if (state.anim.cursorSeq > lines[start].__seq) state.anim.cursorSeq = lines[start].__seq;
+    else if (start - 1 >= 0) {
+      let j = start - 1; const prevLine = lines[j].line as number; while (j - 1 >= 0 && (lines[j - 1].line as number) === prevLine) j--; let k=j; while (k + 1 < lines.length && (lines[k + 1].line as number) === prevLine) k++; state.anim.cursorSeq = lines[k].__seq;
+    } else { state.anim.cursorSeq = Math.max(range.start, lines[start].__seq); }
+  }
+  updateAnimatedView();
+  if (state.session) provider.refresh(state.session.doc);
+  pushAnimatorState();
+}
+
+function updateAnimatedView() {
+  if (!state.session) return;
+  // decoration
+  ensureAnimatorDecoration();
+  const editor = vscode.window.visibleTextEditors.find(ed => state.session && ed.document.uri.toString() === state.session.doc.uri.toString()) || vscode.window.activeTextEditor;
+  const entries = currentEntries().filter(e => (e.type ?? 'line') === 'line');
+  const curr = entries.find(e => e.__seq >= state.anim.cursorSeq) ?? entries[entries.length - 1];
+  if (editor && curr && typeof curr.line === 'number') {
+    const idx = Math.max(0, (curr.line as number) - 1);
+    const line = editor.document.lineAt(Math.min(idx, editor.document.lineCount - 1));
+    editor.setDecorations(state.anim.deco!, [new vscode.Range(line.range.start, line.range.start)]);
+    // select the line and scroll into view
+    editor.selections = [new vscode.Selection(line.range.start, line.range.end)];
+    editor.revealRange(line.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  }
+}
+
+function ensureAnimatorDecoration() {
+  if (state.anim.deco) return;
+  state.anim.deco = vscode.window.createTextEditorDecorationType({
+    gutterIconPath: vscode.Uri.parse('data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><polygon points="3,2 13,8 3,14" fill="#FFD700"/></svg>')),
+    gutterIconSize: 'contain',
+  });
+}
+
+function clearAnimatorDecoration() {
+  const editor = vscode.window.activeTextEditor;
+  if (state.anim.deco && editor) editor.setDecorations(state.anim.deco, []);
 }

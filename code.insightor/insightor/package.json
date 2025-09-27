@@ -15,7 +15,8 @@
     "onCommand:insightor.stopSession",
     "onCommand:insightor.showTimeline",
     "onCommand:insightor.showVariablesTable",
-    "onCommand:insightor.showCallGraph"
+    "onCommand:insightor.showCallGraph",
+    "onCommand:insightor.showAnimator"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -43,6 +44,10 @@
       {
         "command": "insightor.showCallGraph",
         "title": "Insightor: Show Call Graph"
+      },
+      {
+        "command": "insightor.showAnimator",
+        "title": "Insightor: Show Animator"
       }
     ]
   },
