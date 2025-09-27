@@ -20,6 +20,7 @@ const state = {
   },
   timelinePanel: null as null | vscode.WebviewPanel,
   variablesPanel: null as null | vscode.WebviewPanel,
+  callGraphPanel: null as null | vscode.WebviewPanel,
 };
 
 // This method is called when your extension is activated
@@ -94,13 +95,18 @@ export function activate(context: vscode.ExtensionContext) {
 		openOrRevealVariablesTable(context, inlayProvider);
 	});
 
+	const showCallGraph = vscode.commands.registerCommand('insightor.showCallGraph', async () => {
+		openOrRevealCallGraph(context, inlayProvider);
+	});
+
 	context.subscriptions.push(
 		vscode.languages.registerInlayHintsProvider({ language: 'csharp' }, inlayProvider),
 		startSession,
 		restartSession,
 		stopSession,
 		showTimeline,
-		showVariablesTable
+		showVariablesTable,
+		showCallGraph
 	);
 }
 
@@ -209,13 +215,15 @@ async function runInsightorNow(context: vscode.ExtensionContext, provider: Insig
           return { type, line: raw.line as number, variables: (raw.variables ?? {}) as Record<string, unknown>, __seq: i } as AnyEvent;
         }
         if (type === 'callStart' || type === 'callEnd') {
-          return { type, method: String(raw.method ?? ''), line: raw.line as number | undefined, __seq: i } as AnyEvent;
+          return { type, method: String(raw.method ?? ''), line: raw.line as number | undefined, variables: (raw.variables ?? {}) as Record<string, unknown>, __seq: i } as AnyEvent;
         }
         return { type: 'line', line: raw.line as number, variables: (raw.variables ?? {}) as Record<string, unknown>, __seq: i } as AnyEvent;
       });
     state.lastResults.set(doc.uri.toString(), events);
     provider.refresh(doc);
     updateTimelineWebview(events);
+    pushVariablesData();
+    pushCallGraphData();
   } catch (err: any) {
     vscode.window.showErrorMessage('Insightor failed: ' + (err?.message ?? String(err)));
   } finally {
@@ -276,16 +284,16 @@ function updateTimelineWebview(events: AnyEvent[]) {
   state.timelinePanel.webview.postMessage({ type: 'frames', total, range, frames });
 }
 
-type Frame = { id: number; method: string; start: number; end: number; depth: number; line?: number };
+type Frame = { id: number; method: string; start: number; end: number; depth: number; line?: number, args?: Record<string, unknown> };
 function buildFrames(events: AnyEvent[]): Frame[] {
   const frames: Frame[] = [];
-  const stack: { method: string; start: number; line?: number }[] = [];
+  const stack: { method: string; start: number; line?: number, args?: Record<string, unknown> }[] = [];
   let nextId = 1;
   for (const ev of events) {
     const t = ev.type ?? 'line';
     if (t === 'callStart') {
       const m = String(ev.method ?? '');
-      stack.push({ method: m, start: ev.__seq, line: ev.line });
+      stack.push({ method: m, start: ev.__seq, line: ev.line, args: (ev.variables ?? {}) as Record<string, unknown> });
     } else if (t === 'callEnd') {
       const m = String(ev.method ?? '');
       for (let i = stack.length - 1; i >= 0; i--) {
@@ -293,7 +301,7 @@ function buildFrames(events: AnyEvent[]): Frame[] {
           const depth = i;
           const start = stack[i].start;
           const line = stack[i].line;
-          frames.push({ id: nextId++, method: m, start, end: ev.__seq, depth, line });
+          frames.push({ id: nextId++, method: m, start, end: ev.__seq, depth, line, args: stack[i].args });
           stack.splice(i, 1);
           break;
         }
@@ -304,7 +312,7 @@ function buildFrames(events: AnyEvent[]): Frame[] {
   const lastSeq = events.length > 0 ? events[events.length - 1].__seq : 0;
   for (let i = 0; i < stack.length; i++) {
     const f = stack[i];
-    frames.push({ id: nextId++, method: f.method, start: f.start, end: lastSeq, depth: i, line: f.line });
+    frames.push({ id: nextId++, method: f.method, start: f.start, end: lastSeq, depth: i, line: f.line, args: f.args });
   }
   return frames;
 }
@@ -360,7 +368,9 @@ function getTimelineHtml(): string {
           const bar = document.createElement('div'); bar.className = 'bar';
           const y1 = posY(f.start, height, padY); const y2 = posY(Math.max(f.end, f.start+1), height, padY);
           bar.style.left = colX + 'px'; bar.style.top = y1 + 'px'; bar.style.width = thinW + 'px'; bar.style.height = Math.max(2, y2 - y1) + 'px';
-          bar.title = f.method + (f.line ? (' @ L' + f.line) : '');
+          // Build tooltip with arguments if available
+          const argsTip = f.args ? Object.entries(f.args).map(([k,v])=>k+': '+stringify(v)).join(', ') : '';
+          bar.title = f.method + (f.line ? (' @ L' + f.line) : '') + (argsTip? (' | '+argsTip):'');
           bar.addEventListener('click', (e)=>{ e.stopPropagation(); const s = clampIndex(f.start); const ee = clampIndex(f.end); start = s; end = ee; activeId = f.id; vscode.postMessage({ type: 'updateRange', start: s, end: ee }); render(); });
           // Color and active state
           const selected = frames.find(ff => ff.id === activeId);
@@ -388,6 +398,7 @@ function getTimelineHtml(): string {
         sel.style.zIndex = '0';
         sel.style.top = posY(start, height, padY)+'px'; sel.style.height = Math.max(2, posY(end, height, padY)-posY(start, height, padY))+'px';
       }
+      function stringify(v){ try { if (v===null||v===undefined) return 'null'; if (typeof v==='object') return JSON.stringify(v); return String(v);} catch { return String(v);} }
     </script>
   </body>
   </html>`;
@@ -503,6 +514,126 @@ function getVariablesHtml(): string {
         host.appendChild(block);
       }
     }
+  </script>
+</body>
+</html>`;
+}
+
+function openOrRevealCallGraph(context: vscode.ExtensionContext, provider: InsightorInlayProvider) {
+  if (state.callGraphPanel) {
+    state.callGraphPanel.reveal();
+    pushCallGraphData();
+    return;
+  }
+  const panel = vscode.window.createWebviewPanel(
+    'insightorCallGraph',
+    'Insightor Call Graph',
+    vscode.ViewColumn.Beside,
+    { enableScripts: true, retainContextWhenHidden: true }
+  );
+  state.callGraphPanel = panel;
+  panel.onDidDispose(() => { state.callGraphPanel = null; });
+  panel.webview.html = getCallGraphHtml();
+  const selSub = vscode.window.onDidChangeTextEditorSelection(e => { if (!state.session) return; if (e.textEditor.document.uri.toString() !== state.session.doc.uri.toString()) return; pushCallGraphData(); });
+  state.session?.disposables.push(selSub);
+  pushCallGraphData();
+}
+
+function pushCallGraphData() {
+  if (!state.callGraphPanel || !state.session) return;
+  const events = state.lastResults.get(state.session.doc.uri.toString()) ?? [];
+  const frames = buildFrames(events);
+  // Determine selected time window from range
+  const range = state.session.range;
+  // Build edges by parent-child from frames nesting within selected range
+  const nodes = new Map<number, { id: number, label: string, start: number, end: number }>();
+  const edges: { from: number, to: number }[] = [];
+  const active = frames.filter(f => f.start >= range.start && f.end <= range.end);
+  for (const f of active) {
+    nodes.set(f.id, { id: f.id, label: f.method, start: f.start, end: f.end });
+  }
+  // parent: the deepest frame that strictly encloses this frame
+  for (const child of active) {
+    let parent: typeof child | null = null;
+    for (const cand of active) {
+      if (cand.id === child.id) continue;
+      if (cand.start <= child.start && cand.end >= child.end && cand.depth < child.depth) {
+        if (!parent || cand.depth > parent.depth) parent = cand;
+      }
+    }
+    if (parent) edges.push({ from: parent.id, to: child.id });
+  }
+  // Attach argument/return data: search events between start/end
+  const annotations: Record<number, { args: Record<string, unknown>, ret?: unknown }> = {};
+  for (const f of active) {
+    const evs = events.filter(e => e.__seq >= f.start && e.__seq <= f.end);
+    const startEv = evs.find(e => (e.type ?? 'line') === 'callStart' && (e.method||'') === f.method);
+    const retLineEv = evs.find(e => (e.type ?? 'line') === 'line' && e.variables && Object.prototype.hasOwnProperty.call(e.variables, 'return'));
+    annotations[f.id] = { args: (startEv?.variables as any) || {}, ret: retLineEv?.variables ? (retLineEv.variables as any)['return'] : undefined };
+  }
+  state.callGraphPanel.webview.postMessage({ type: 'graph', nodes: Array.from(nodes.values()), edges, annotations });
+}
+
+function getCallGraphHtml(): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
+    .wrap { padding: 12px; }
+    .graph { position: relative; width: 100%; height: 360px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: auto; background: var(--vscode-editorWidget-background); }
+    .node { position: absolute; min-width: 140px; max-width: 220px; padding: 6px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editorHoverWidget-background); font-size: 12px; }
+    .edge { position: absolute; height: 2px; background: var(--vscode-panel-border); transform-origin: 0 0; }
+    .title { font-weight: bold; margin-bottom: 4px; }
+    .kv { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="graph" class="graph"></div>
+  </div>
+  <script>
+    const graph = document.getElementById('graph');
+    window.addEventListener('message', e => { const msg = e.data; if (msg.type === 'graph') render(msg.nodes||[], msg.edges||[], msg.annotations||{}); });
+    function hashCode(str){ let h=0; for(let i=0;i<str.length;i++){ h=((h<<5)-h)+str.charCodeAt(i); h|=0; } return Math.abs(h); }
+    function colorFor(method){ const h=(hashCode(method)%360+360)%360; const s=70; const l=45; return 'hsl(' + h + ' ' + s + '% ' + l + '%)'; }
+    function render(nodes, edges, annotations){
+      graph.innerHTML = '';
+      // simple tree layout: columns by depth inferred from edges
+      const depthMap = new Map();
+      const indeg = new Map(); nodes.forEach(n=>indeg.set(n.id,0)); edges.forEach(e=>indeg.set(e.to,(indeg.get(e.to)||0)+1));
+      const roots = nodes.filter(n=> (indeg.get(n.id)||0) === 0);
+      const byId = new Map(nodes.map(n=>[n.id,n]));
+      function depthOf(id){ if(depthMap.has(id)) return depthMap.get(id); const parentEdge = edges.find(e=>e.to===id); if(!parentEdge){ depthMap.set(id,0); return 0;} const d = depthOf(parentEdge.from)+1; depthMap.set(id,d); return d; }
+      nodes.forEach(n=>depthOf(n.id));
+      const colX = d=> 20 + d*240;
+      const scaleY = s=> 20 + s*22; // stack vertically by order
+      const order = nodes.slice().sort((a,b)=> a.start - b.start);
+      const yMap = new Map(order.map((n,i)=>[n.id, scaleY(i)]));
+      // draw nodes
+      for(const n of nodes){
+        const el = document.createElement('div'); el.className='node'; el.style.left = colX(depthMap.get(n.id))+'px'; el.style.top = (yMap.get(n.id)||0)+'px';
+        const t = document.createElement('div'); t.className='title'; t.textContent = n.label;
+        el.appendChild(t);
+        const ann = annotations[n.id]||{args:{}};
+        for (const [k,v] of Object.entries(ann.args||{})) { const kv=document.createElement('div'); kv.className='kv'; kv.textContent = k+': '+stringify(v); el.appendChild(kv); }
+        if ('ret' in ann) { const kv=document.createElement('div'); kv.className='kv'; kv.textContent = 'return: '+stringify(ann.ret); el.appendChild(kv); }
+        // Border color consistent with timeline color
+        el.style.borderColor = colorFor(n.label);
+        graph.appendChild(el);
+      }
+      // draw edges
+      for(const e of edges){
+        const a = byId.get(e.from), b = byId.get(e.to); if(!a||!b) continue;
+        const x1 = colX(depthMap.get(a.id)) + 220, y1 = (yMap.get(a.id)||0) + 20;
+        const x2 = colX(depthMap.get(b.id)), y2 = (yMap.get(b.id)||0) + 20;
+        const dx = x2 - x1, dy = y2 - y1; const len=Math.hypot(dx,dy); const ang=Math.atan2(dy,dx)*180/Math.PI;
+        const edge = document.createElement('div'); edge.className='edge'; edge.style.left=x1+'px'; edge.style.top=y1+'px'; edge.style.width=len+'px'; edge.style.transform='rotate('+ang+'deg)'; graph.appendChild(edge);
+      }
+    }
+    function stringify(v){ try { if (v===null||v===undefined) return 'null'; if (typeof v==='object') return JSON.stringify(v); return String(v);} catch { return String(v);} }
   </script>
 </body>
 </html>`;

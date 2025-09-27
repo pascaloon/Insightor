@@ -14,7 +14,8 @@
     "onCommand:insightor.restartSession",
     "onCommand:insightor.stopSession",
     "onCommand:insightor.showTimeline",
-    "onCommand:insightor.showVariablesTable"
+    "onCommand:insightor.showVariablesTable",
+    "onCommand:insightor.showCallGraph"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -38,6 +39,10 @@
       {
         "command": "insightor.showVariablesTable",
         "title": "Insightor: Show Variables Table"
+      },
+      {
+        "command": "insightor.showCallGraph",
+        "title": "Insightor: Show Call Graph"
       }
     ]
   },

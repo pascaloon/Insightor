@@ -245,7 +245,7 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         if (visited.ExpressionBody is not null)
         {
             // Build: { __Probe.CallStart(methodId, line); try { return <expr>; } finally { __Probe.CallEnd(methodId, line); } }
-            var startInv = CreateCallInvocation(true, methodId, methodLine);
+            var startInv = CreateCallInvocation(true, methodId, methodLine, GetParameterBindings(node.ParameterList));
             var endInv = CreateCallInvocation(false, methodId, methodLine);
             var tryBlock = SyntaxFactory.Block(
                 SyntaxFactory.ReturnStatement(visited.ExpressionBody.Expression)
@@ -265,7 +265,7 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         }
 
         // Wrap existing body in try/finally with CallStart/CallEnd
-        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine));
+        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine, GetParameterBindings(node.ParameterList)));
         var endCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, methodId, methodLine));
         var tryBody = SyntaxFactory.Block(visited.Body.Statements);
         var finallyBody = SyntaxFactory.Block(endCall);
@@ -288,7 +288,7 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             return visited;
         }
 
-        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine));
+        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine, GetParameterBindings(node.ParameterList)));
         var endCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, methodId, methodLine));
         var tryBody = SyntaxFactory.Block(visited.Body.Statements);
         var finallyBody = SyntaxFactory.Block(endCall);
@@ -308,7 +308,7 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
 
         if (visited.ExpressionBody is not null)
         {
-            var startInv = CreateCallInvocation(true, methodId, methodLine);
+            var startInv = CreateCallInvocation(true, methodId, methodLine, GetParameterBindings(node.ParameterList));
             var endInv = CreateCallInvocation(false, methodId, methodLine);
             var tryBlock = SyntaxFactory.Block(
                 SyntaxFactory.ReturnStatement(visited.ExpressionBody.Expression)
@@ -327,7 +327,7 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             return visited;
         }
 
-        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine));
+        var startCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(true, methodId, methodLine, GetParameterBindings(node.ParameterList)));
         var endCall = SyntaxFactory.ExpressionStatement(CreateCallInvocation(false, methodId, methodLine));
         var tryBody = SyntaxFactory.Block(visited.Body.Statements);
         var finallyBody = SyntaxFactory.Block(endCall);
@@ -674,7 +674,7 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             .WithArgumentList(SyntaxFactory.ArgumentList(SyntaxFactory.SeparatedList(args)));
     }
 
-    private static InvocationExpressionSyntax CreateCallInvocation(bool isStart, string methodId, int line)
+    private static InvocationExpressionSyntax CreateCallInvocation(bool isStart, string methodId, int line, IEnumerable<(string name, ExpressionSyntax expr)>? vars = null)
     {
         var methodName = isStart ? "CallStart" : "CallEnd";
         var args = new List<ArgumentSyntax>
@@ -682,6 +682,14 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
             SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(methodId))),
             SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(SyntaxKind.NumericLiteralExpression, SyntaxFactory.Literal(line)))
         };
+        if (isStart && vars is not null)
+        {
+            foreach (var (name, expr) in vars)
+            {
+                args.Add(SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(name))));
+                args.Add(SyntaxFactory.Argument(expr));
+            }
+        }
         return SyntaxFactory.InvocationExpression(
             SyntaxFactory.MemberAccessExpression(
                 SyntaxKind.SimpleMemberAccessExpression,
@@ -698,6 +706,19 @@ sealed class ProbeRewriter : CSharpSyntaxRewriter
         var parms = string.Join(", ", symbol.Parameters.Select(p => p.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)));
         var qual = string.IsNullOrEmpty(containing) ? method : containing + "." + method;
         return parms.Length > 0 ? $"{qual}({parms})" : $"{qual}()";
+    }
+
+    private static IEnumerable<(string name, ExpressionSyntax expr)> GetParameterBindings(BaseParameterListSyntax? parameterList)
+    {
+        var bindings = new List<(string, ExpressionSyntax)>();
+        if (parameterList is null) return bindings;
+        foreach (var p in parameterList.Parameters)
+        {
+            var name = p.Identifier.Text;
+            if (string.IsNullOrEmpty(name)) continue;
+            bindings.Add((name, SyntaxFactory.IdentifierName(name)));
+        }
+        return bindings;
     }
 }
 
@@ -763,11 +784,18 @@ namespace __Insightor
             catch { /* swallow */ }
         }
 
-        public static void CallStart(string method, int line)
+        public static void CallStart(string method, int line, params object?[] kvs)
         {
             try
             {
-                var payload = new { type = "callStart", method, line, variables = new Dictionary<string, object?>() };
+                var dict = new Dictionary<string, object?>();
+                for (int i = 0; i + 1 < kvs.Length; i += 2)
+                {
+                    var key = kvs[i]?.ToString() ?? $"_{i}";
+                    var val = kvs[i + 1];
+                    dict[key] = val;
+                }
+                var payload = new { type = "callStart", method, line, variables = dict };
                 string json = JsonSerializer.Serialize(payload);
                 lock (_lock)
                 {
