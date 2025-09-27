@@ -1,12 +1,32 @@
-﻿
+﻿int Fact(int x)
+{
+    if (x <= 1)
+        return 1;
+    return x * Fact(x - 1);
+}
+
+
 int Add(int x, int y)
 {
     return x + y;
 }
 
+int Magic(int x, int y)
+{
+    return Add(x, y) * Add(x * 2, y * 2);
+}
+
 int a = 3;
 int b = 4;
-int z = Add(a, b);
+int z = Magic(a, b);
+int z2 = Add(a*2, b*2);
+
+for (int i = 0; i < 5; i++)
+{
+    a = Add(a, 2);
+}
+
+int z3 = Fact(3);
 
 
 // int a = 2;

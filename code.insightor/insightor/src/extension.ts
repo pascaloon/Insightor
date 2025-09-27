@@ -314,9 +314,10 @@ function getTimelineHtml(): string {
     .wrap { padding: 12px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
     .info { font-size: 12px; opacity: 0.8; }
     .timeline { position: relative; width: 100%; height: 320px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow: auto; }
-    .bar { position: absolute; border-radius: 3px; background: var(--vscode-editorHoverWidget-background); border: 1px solid var(--vscode-panel-border); cursor: pointer; display: flex; align-items: flex-start; justify-content: flex-start; }
+    .bar { position: absolute; border-radius: 2px; border: 1px solid var(--vscode-panel-border); cursor: pointer; display: block; opacity: 0.75; z-index: 1; }
     .bar:hover { outline: 1px solid var(--vscode-focusBorder); }
-    .label { font-size: 11px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar.active { opacity: 1; border-color: var(--vscode-focusBorder); }
+    .label { display: none; }
     .tickH { position: absolute; left: 0; right: 0; height: 1px; background: var(--vscode-panel-border); opacity: 0.4; }
   </style>
   </head>
@@ -327,7 +328,7 @@ function getTimelineHtml(): string {
     </div>
     <script>
       const vscode = acquireVsCodeApi();
-      let total = 0; let start = 0; let end = 0; let frames = [];
+      let total = 0; let start = 0; let end = 0; let frames = []; let activeId = null;
       const timeline = document.getElementById('timeline');
       const info = document.getElementById('info');
 
@@ -341,7 +342,7 @@ function getTimelineHtml(): string {
         const height = timeline.clientHeight || 320;
         const width = timeline.clientWidth || 600;
         const visible = frames;
-        const padY = 8; const padX = 8; const columnWidth = 180; const gapX = 12;
+        const padY = 8; const padX = 8; const thinW = 8; const gapX = 16; const columnWidth = thinW + gapX;
         const maxDepth = visible.reduce((m,f)=>Math.max(m,f.depth||0),0);
         // ticks (horizontal)
         const tickStep = Math.max(1, Math.floor(total / 20));
@@ -352,11 +353,14 @@ function getTimelineHtml(): string {
           const colX = padX + f.depth * columnWidth;
           const bar = document.createElement('div'); bar.className = 'bar';
           const y1 = posY(f.start, height, padY); const y2 = posY(Math.max(f.end, f.start+1), height, padY);
-          bar.style.left = colX + 'px'; bar.style.top = y1 + 'px'; bar.style.width = (columnWidth - gapX) + 'px'; bar.style.height = Math.max(2, y2 - y1) + 'px';
+          bar.style.left = colX + 'px'; bar.style.top = y1 + 'px'; bar.style.width = thinW + 'px'; bar.style.height = Math.max(2, y2 - y1) + 'px';
           bar.title = f.method + (f.line ? (' @ L' + f.line) : '');
-          const label = document.createElement('div'); label.className = 'label'; label.textContent = f.method;
-          bar.appendChild(label);
-          bar.addEventListener('click', (e)=>{ e.stopPropagation(); const s = clampIndex(f.start); const ee = clampIndex(f.end); start = s; end = ee; vscode.postMessage({ type: 'updateRange', start: s, end: ee }); highlightSelection(height, padY); });
+          bar.addEventListener('click', (e)=>{ e.stopPropagation(); const s = clampIndex(f.start); const ee = clampIndex(f.end); start = s; end = ee; activeId = f.id; vscode.postMessage({ type: 'updateRange', start: s, end: ee }); render(); });
+          // Color and active state
+          const selected = frames.find(ff => ff.id === activeId);
+          const isActive = selected ? (isAncestor(f, selected) || isDescendant(f, selected) || f.id === selected.id) : false;
+          bar.className = 'bar' + (isActive ? ' active' : '');
+          bar.style.backgroundColor = colorFor(f, isActive);
           timeline.appendChild(bar);
         }
         // spacer to extend scrollable width for deep stacks
@@ -367,9 +371,16 @@ function getTimelineHtml(): string {
       function posY(index, height, padY) { if (total <= 1) return padY; const h = Math.max(1, height - padY*2); return Math.round(padY + (index/(total-1))*h); }
       function clampIndex(i) { return Math.max(0, Math.min((total>0?total-1:0), Math.floor(i))); }
 
+      function isAncestor(a, b) { return a.start <= b.start && a.end >= b.end && a.depth <= b.depth; }
+      function isDescendant(a, b) { return a.start >= b.start && a.end <= b.end && a.depth >= b.depth; }
+      function colorFor(f, active) { const h = (hashCode(f.method||'') % 360 + 360) % 360; const s = active ? 70 : 55; const l = active ? 45 : 30; return 'hsl(' + h + ' ' + s + '% ' + l + '%)'; }
+      function hashCode(str){ let h=0; for(let i=0;i<str.length;i++){ h=((h<<5)-h)+str.charCodeAt(i); h|=0; } return Math.abs(h); }
+
       function highlightSelection(height, padY) {
-        const sel = document.createElement('div'); sel.style.position = 'absolute'; sel.style.left = '0'; sel.style.right = '0'; sel.style.top = posY(start, height, padY)+'px'; sel.style.height = Math.max(2, posY(end, height, padY)-posY(start, height, padY))+'px'; sel.style.background='var(--vscode-editorHoverWidget-background)'; sel.style.opacity='0.2'; sel.style.pointerEvents='none';
-        timeline.appendChild(sel);
+        let sel = document.getElementById('insightor-sel');
+        if (!sel) { sel = document.createElement('div'); sel.id = 'insightor-sel'; sel.style.position = 'absolute'; sel.style.left = '0'; sel.style.right = '0'; sel.style.background='var(--vscode-editorHoverWidget-background)'; sel.style.opacity='0.2'; sel.style.pointerEvents='none'; timeline.appendChild(sel); }
+        sel.style.zIndex = '0';
+        sel.style.top = posY(start, height, padY)+'px'; sel.style.height = Math.max(2, posY(end, height, padY)-posY(start, height, padY))+'px';
       }
     </script>
   </body>
